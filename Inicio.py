@@ -53,7 +53,8 @@ if st.button("Clasificar cliente"):
     else:
         st.write("Las clasificaciones difieren. Se recomienda revisar el caso manualmente.")
 
-st.subheader("Información del sistema")
-st.write("Este sistema utiliza un árbol de decisión y una máquina de soporte vectorial (SVM) para clasificar a los clientes en diferentes tipos.")
-st.write("Los tipos de clientes son: individual, pequeña empresa, mediana empresa, grande empresa y alta renta.")
-st.write("La clasificación se basa en la edad, los ingresos anuales y el patrimonio del cliente.")
+with st.sidebar:
+  st.subheader("Información del sistema")
+  st.write("Este sistema utiliza un árbol de decisión y una máquina de soporte vectorial (SVM) para clasificar a los clientes en diferentes tipos.")
+  st.write("Los tipos de clientes son: individual, pequeña empresa, mediana empresa, grande empresa y alta renta.")
+  st.write("La clasificación se basa en la edad, los ingresos anuales y el patrimonio del cliente.")
