@@ -9,7 +9,7 @@ data = {
     'edad': [25, 35, 45, 55, 65, 75],
     'ingresos': [300000, 500000, 700000, 1000000, 1500000, 2000000],
     'patrimonio': [500000, 1000000, 1500000, 2000000, 3000000, 5000000],
-    'tipo_cliente': ['individual', 'pequeña_empresa', 'mediana_empresa', 'grande_empresa', 'alta_renta']
+    'tipo_cliente': ['individual','individual', 'pequeña_empresa', 'mediana_empresa', 'grande_empresa', 'alta_renta']
 }
 df = pd.DataFrame(data)
 
