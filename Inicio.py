@@ -12,7 +12,7 @@ data = {
     'tipo_cliente': ['individual','individual', 'pequeña_empresa', 'mediana_empresa', 'grande_empresa', 'alta_renta']
 }
 df = pd.DataFrame(data)
-st.subheader("Base de datos de Eejmplo")
+st.subheader("Base de datos de Ejemplo")
 st.dataframe(df)
 # Dividir datos en características y etiqueta
 X = df[['edad', 'ingresos', 'patrimonio']]
