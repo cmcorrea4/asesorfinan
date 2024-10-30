@@ -40,8 +40,8 @@ st.title("Sistema de Asesoría Financiera")
 
 st.subheader("Ingrese información del cliente")
 edad = st.number_input("Edad", min_value=18, max_value=100, step=1, value=35)
-ingresos = st.number_input("Ingresos anuales (USD)", min_value=0, max_value=1000000, step=1000, value=50000)
-patrimonio = st.number_input("Patrimonio (USD)", min_value=0, max_value=1000000, step=1000, value=100000)
+ingresos = st.number_input("Ingresos anuales ($)", min_value=0, max_value=1000000, step=1000, value=50000)
+patrimonio = st.number_input("Patrimonio ($)", min_value=0, max_value=1000000, step=1000, value=100000)
 
 if st.button("Clasificar cliente"):
     dt_pred, svm_pred = classify_client(edad, ingresos, patrimonio)
