@@ -7,8 +7,8 @@ import streamlit as st
 # Generar datos de clientes ficticios
 data = {
     'edad': [25, 35, 45, 55, 65, 75],
-    'ingresos': [300000, 500000, 700000, 1000000, 1500000, 2000000],
-    'patrimonio': [500000, 1000000, 1500000, 2000000, 3000000, 5000000],
+    'ingresos': [3000000, 5000000, 7000000, 10000000, 15000000, 20000000],
+    'patrimonio': [5000000, 10000000, 15000000, 20000000, 30000000, 50000000],
     'tipo_cliente': ['individual','individual', 'pequeña_empresa', 'mediana_empresa', 'grande_empresa', 'alta_renta']
 }
 df = pd.DataFrame(data)
@@ -40,8 +40,8 @@ st.title("Sistema de Asesoría Financiera")
 
 st.subheader("Ingrese información del cliente")
 edad = st.number_input("Edad", min_value=18, max_value=100, step=1, value=35)
-ingresos = st.number_input("Ingresos anuales ($)", min_value=0, max_value=10000000, step=1000, value=500000)
-patrimonio = st.number_input("Patrimonio ($)", min_value=0, max_value=10000000, step=1000, value=1000000)
+ingresos = st.number_input("Ingresos anuales ($)", min_value=0, max_value=1000000000, step=1000, value=500000)
+patrimonio = st.number_input("Patrimonio ($)", min_value=0, max_value=1000000000, step=1000, value=1000000)
 
 if st.button("Clasificar cliente"):
     dt_pred, svm_pred = classify_client(edad, ingresos, patrimonio)
