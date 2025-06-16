@@ -699,26 +699,49 @@ def main():
                 # Guardar cotización en session_state para descargar PDF
                 st.session_state.ultima_cotizacion = cotizacion
                 
+                # Generar PDF automáticamente al crear cotización
+                try:
+                    datos_empresa_pdf = None
+                    if any(key.startswith('empresa_') for key in st.session_state.keys()):
+                        datos_empresa_pdf = {
+                            'nombre': st.session_state.get('empresa_nombre', 'Tu Empresa de Productos de Madera'),
+                            'nit': st.session_state.get('empresa_nit', '900.XXX.XXX-X'),
+                            'direccion': st.session_state.get('empresa_direccion', 'Calle XX # XX - XX'),
+                            'telefono': st.session_state.get('empresa_telefono', 'XXX-XXXX'),
+                            'ciudad': st.session_state.get('empresa_ciudad', 'Medellín'),
+                            'email': st.session_state.get('empresa_email', 'ventas@tuempresa.com')
+                        }
+                    
+                    pdf_buffer = st.session_state.generador.generar_pdf_cotizacion(cotizacion, datos_empresa_pdf)
+                    st.session_state.pdf_generado = pdf_buffer.getvalue()
+                    st.session_state.nombre_archivo_pdf = f"Cotizacion_{cotizacion['numero_cotizacion']}.pdf"
+                except Exception as e:
+                    st.error(f"Error al generar PDF: {str(e)}")
+                    st.session_state.pdf_generado = None
+                
                 # Botones de acción
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
-                    # Botón para descargar PDF
-                    if st.button("📄 Descargar PDF", type="primary"):
-                        try:
-                            pdf_buffer = st.session_state.generador.generar_pdf_cotizacion(cotizacion)
-                            st.download_button(
-                                label="⬇️ Descargar Cotización PDF",
-                                data=pdf_buffer.getvalue(),
-                                file_name=f"Cotizacion_{cotizacion['numero_cotizacion']}.pdf",
-                                mime="application/pdf"
-                            )
-                        except Exception as e:
-                            st.error(f"Error al generar PDF: {str(e)}")
+                    # Botón de descarga directo
+                    if st.session_state.get('pdf_generado') is not None:
+                        st.download_button(
+                            label="📄 Descargar PDF",
+                            data=st.session_state.pdf_generado,
+                            file_name=st.session_state.nombre_archivo_pdf,
+                            mime="application/pdf",
+                            type="primary"
+                        )
+                    else:
+                        st.error("No se pudo generar el PDF")
                 
                 with col2:
                     if st.button("🗑️ Nueva Cotización"):
                         st.session_state.productos_cotizacion = []
+                        if 'pdf_generado' in st.session_state:
+                            del st.session_state.pdf_generado
+                        if 'ultima_cotizacion' in st.session_state:
+                            del st.session_state.ultima_cotizacion
                         st.experimental_rerun()
                 
                 with col3:
@@ -760,6 +783,26 @@ def main():
                             st.session_state.empresa_ciudad = ciudad_empresa
                             st.session_state.empresa_email = email_empresa
                             st.session_state.mostrar_config_empresa = False
+                            
+                            # Regenerar PDF con nuevos datos de empresa
+                            if 'ultima_cotizacion' in st.session_state:
+                                try:
+                                    datos_empresa_pdf = {
+                                        'nombre': nombre_empresa,
+                                        'nit': nit_empresa,
+                                        'direccion': direccion_empresa,
+                                        'telefono': telefono_empresa,
+                                        'ciudad': ciudad_empresa,
+                                        'email': email_empresa
+                                    }
+                                    pdf_buffer = st.session_state.generador.generar_pdf_cotizacion(
+                                        st.session_state.ultima_cotizacion, 
+                                        datos_empresa_pdf
+                                    )
+                                    st.session_state.pdf_generado = pdf_buffer.getvalue()
+                                except:
+                                    pass
+                            
                             st.success("✅ Configuración guardada")
                             st.experimental_rerun()
                     
@@ -769,35 +812,6 @@ def main():
                             st.experimental_rerun()
                     
                     st.markdown("---")
-                
-                # Generar PDF con datos de empresa configurados si existen
-                datos_empresa_pdf = None
-                if any(key.startswith('empresa_') for key in st.session_state.keys()):
-                    datos_empresa_pdf = {
-                        'nombre': st.session_state.get('empresa_nombre', 'Tu Empresa de Productos de Madera'),
-                        'nit': st.session_state.get('empresa_nit', '900.XXX.XXX-X'),
-                        'direccion': st.session_state.get('empresa_direccion', 'Calle XX # XX - XX'),
-                        'telefono': st.session_state.get('empresa_telefono', 'XXX-XXXX'),
-                        'ciudad': st.session_state.get('empresa_ciudad', 'Medellín'),
-                        'email': st.session_state.get('empresa_email', 'ventas@tuempresa.com')
-                    }
-                
-                # Botón alternativo para descargar PDF si ya se configuró empresa
-                if datos_empresa_pdf and not st.session_state.get('mostrar_config_empresa', False):
-                    if st.button("📄 Generar PDF con datos de empresa"):
-                        try:
-                            pdf_buffer = st.session_state.generador.generar_pdf_cotizacion(cotizacion, datos_empresa_pdf)
-                            st.download_button(
-                                label="⬇️ Descargar Cotización PDF Personalizada",
-                                data=pdf_buffer.getvalue(),
-                                file_name=f"Cotizacion_{cotizacion['numero_cotizacion']}.pdf",
-                                mime="application/pdf",
-                                key="download_custom_pdf"
-                            )
-                        except Exception as e:
-                            st.error(f"Error al generar PDF: {str(e)}")
-                
-                st.markdown("---")
                 
                 # Información de la cotización
                 st.subheader(f"📄 Cotización {cotizacion['numero_cotizacion']}")
@@ -840,8 +854,12 @@ def main():
                         st.write(f"• {condicion}")
                 
                 # Botón para limpiar cotización
-                if st.button("🗑️ Nueva Cotización"):
+                if st.button("🗑️ Limpiar Cotización", key="limpiar_final"):
                     st.session_state.productos_cotizacion = []
+                    if 'pdf_generado' in st.session_state:
+                        del st.session_state.pdf_generado
+                    if 'ultima_cotizacion' in st.session_state:
+                        del st.session_state.ultima_cotizacion
                     st.experimental_rerun()
             else:
                 st.error("❌ Por favor, ingresa al menos el nombre del cliente.")
