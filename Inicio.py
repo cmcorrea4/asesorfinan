@@ -220,12 +220,12 @@ class GeneradorCotizacionesMadera:
         """Generar PDF de la cotización con formato profesional"""
         buffer = BytesIO()
         
-        # Configuración de la página con márgenes más pequeños
+        # Configuración de la página con márgenes aún más pequeños
         doc = SimpleDocTemplate(
             buffer,
             pagesize=A4,
-            rightMargin=15*mm,
-            leftMargin=15*mm,
+            rightMargin=10*mm,
+            leftMargin=10*mm,
             topMargin=15*mm,
             bottomMargin=15*mm
         )
@@ -289,7 +289,7 @@ class GeneradorCotizacionesMadera:
             ]
         ]
         
-        header_table = Table(header_data, colWidths=[4.5*inch, 2.5*inch])
+        header_table = Table(header_data, colWidths=[5*inch, 2.8*inch])
         header_table.setStyle(TableStyle([
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
@@ -327,7 +327,7 @@ class GeneradorCotizacionesMadera:
             ]
         ]
         
-        cliente_table = Table(cliente_data, colWidths=[3.5*inch, 3.5*inch])
+        cliente_table = Table(cliente_data, colWidths=[3.9*inch, 3.9*inch])
         cliente_table.setStyle(TableStyle([
             ('BOX', (0, 0), (-1, -1), 1, colors.black),
             ('INNERGRID', (0, 0), (-1, -1), 1, colors.black),
@@ -342,9 +342,9 @@ class GeneradorCotizacionesMadera:
         story.append(Spacer(1, 20))
         
         # TABLA DE PRODUCTOS
-        # Headers - simplificamos quitando "Acabado" para dar más espacio
+        # Headers - mantenemos los 5 campos pero con mejor distribución
         productos_headers = [
-            'Referencia', 'Descripción', 'Cantidad', 'Precio Unitario', 'Total'
+            'Referencia', 'Descripción', 'Acabado', 'Cantidad', 'Precio Unitario', 'Total'
         ]
         
         # Datos de productos
@@ -353,18 +353,19 @@ class GeneradorCotizacionesMadera:
         for item in cotizacion['items']:
             productos_data.append([
                 item['referencia'],
-                # Permitir más caracteres en descripción y añadir acabado al final
-                f"{item['descripcion'][:45]} - {item['acabado'][:15]}" if len(item['descripcion']) > 45 
-                else f"{item['descripcion']} - {item['acabado']}",
+                # Permitir más caracteres en descripción
+                item['descripcion'][:50] if len(item['descripcion']) > 50 else item['descripcion'],
+                # Acabado más corto pero visible
+                item['acabado'][:20] if len(item['acabado']) > 20 else item['acabado'],
                 str(item['cantidad']),
                 item['precio_unitario'],
                 item['total']
             ])
         
-        # Crear tabla de productos con anchos optimizados
+        # Crear tabla de productos usando casi todo el ancho de página
         productos_table = Table(
             productos_data, 
-            colWidths=[1.2*inch, 3.5*inch, 0.8*inch, 1.2*inch, 1.2*inch]
+            colWidths=[1.5*inch, 3.2*inch, 1.4*inch, 0.7*inch, 1.1*inch, 1.1*inch]
         )
         
         productos_table.setStyle(TableStyle([
@@ -375,23 +376,27 @@ class GeneradorCotizacionesMadera:
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 10),
             
-            # Datos
+            # Datos - alineación mejorada
             ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
             ('FONTSIZE', (0, 1), (-1, -1), 9),
             ('ALIGN', (0, 1), (0, -1), 'CENTER'),  # Referencia centrada
             ('ALIGN', (1, 1), (1, -1), 'LEFT'),    # Descripción a la izquierda
-            ('ALIGN', (2, 1), (2, -1), 'CENTER'),  # Cantidad centrada
-            ('ALIGN', (3, 1), (-1, -1), 'RIGHT'),  # Precios a la derecha
+            ('ALIGN', (2, 1), (2, -1), 'LEFT'),    # Acabado a la izquierda
+            ('ALIGN', (3, 1), (3, -1), 'CENTER'),  # Cantidad centrada
+            ('ALIGN', (4, 1), (-1, -1), 'RIGHT'),  # Precios a la derecha
             
             # Bordes
             ('BOX', (0, 0), (-1, -1), 1, colors.black),
             ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.black),
             
-            # Padding
-            ('LEFTPADDING', (0, 0), (-1, -1), 6),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            # Padding aumentado para mejor legibilidad
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            
+            # Ajuste vertical para mejor distribución del texto
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ]))
         
         story.append(productos_table)
@@ -407,7 +412,7 @@ class GeneradorCotizacionesMadera:
         
         totales_data.append(['', 'Total:', cotizacion['resumen']['total']])
         
-        totales_table = Table(totales_data, colWidths=[4*inch, 1.8*inch, 1.8*inch])
+        totales_table = Table(totales_data, colWidths=[4.7*inch, 1.8*inch, 1.3*inch])
         totales_table.setStyle(TableStyle([
             ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
             ('FONTNAME', (1, 0), (-1, -1), 'Helvetica-Bold'),
@@ -446,7 +451,7 @@ class GeneradorCotizacionesMadera:
             ['_________________', '_________________', '_________________']
         ]
         
-        firmas_table = Table(firmas_data, colWidths=[2.3*inch, 2.3*inch, 2.3*inch])
+        firmas_table = Table(firmas_data, colWidths=[2.6*inch, 2.6*inch, 2.6*inch])
         firmas_table.setStyle(TableStyle([
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
