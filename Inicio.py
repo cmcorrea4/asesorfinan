@@ -220,12 +220,12 @@ class GeneradorCotizacionesMadera:
         """Generar PDF de la cotización con formato profesional"""
         buffer = BytesIO()
         
-        # Configuración de la página con márgenes aún más pequeños
+        # Configuración de la página con márgenes equilibrados
         doc = SimpleDocTemplate(
             buffer,
             pagesize=A4,
-            rightMargin=10*mm,
-            leftMargin=10*mm,
+            rightMargin=15*mm,
+            leftMargin=15*mm,
             topMargin=15*mm,
             bottomMargin=15*mm
         )
@@ -289,7 +289,7 @@ class GeneradorCotizacionesMadera:
             ]
         ]
         
-        header_table = Table(header_data, colWidths=[5*inch, 2.8*inch])
+        header_table = Table(header_data, colWidths=[4.2*inch, 2.5*inch])
         header_table.setStyle(TableStyle([
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
@@ -327,7 +327,7 @@ class GeneradorCotizacionesMadera:
             ]
         ]
         
-        cliente_table = Table(cliente_data, colWidths=[3.9*inch, 3.9*inch])
+        cliente_table = Table(cliente_data, colWidths=[3.3*inch, 3.3*inch])
         cliente_table.setStyle(TableStyle([
             ('BOX', (0, 0), (-1, -1), 1, colors.black),
             ('INNERGRID', (0, 0), (-1, -1), 1, colors.black),
@@ -353,19 +353,19 @@ class GeneradorCotizacionesMadera:
         for item in cotizacion['items']:
             productos_data.append([
                 item['referencia'],
-                # Permitir más caracteres en descripción
-                item['descripcion'][:50] if len(item['descripcion']) > 50 else item['descripcion'],
-                # Acabado más corto pero visible
-                item['acabado'][:20] if len(item['acabado']) > 20 else item['acabado'],
+                # Reducir caracteres para que quepa mejor
+                item['descripcion'][:30] if len(item['descripcion']) > 30 else item['descripcion'],
+                # Acabado más corto
+                item['acabado'][:15] if len(item['acabado']) > 15 else item['acabado'],
                 str(item['cantidad']),
                 item['precio_unitario'],
                 item['total']
             ])
         
-        # Crear tabla de productos usando casi todo el ancho de página
+        # Crear tabla de productos con anchos más conservadores
         productos_table = Table(
             productos_data, 
-            colWidths=[1.5*inch, 3.2*inch, 1.4*inch, 0.7*inch, 1.1*inch, 1.1*inch]
+            colWidths=[1.1*inch, 2.5*inch, 1.1*inch, 0.6*inch, 1*inch, 1*inch]
         )
         
         productos_table.setStyle(TableStyle([
@@ -374,11 +374,11 @@ class GeneradorCotizacionesMadera:
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('FONTSIZE', (0, 0), (-1, 0), 8),  # Fuente más pequeña
             
-            # Datos - alineación mejorada
+            # Datos - fuente más pequeña
             ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('FONTSIZE', (0, 1), (-1, -1), 7),  # Fuente más pequeña
             ('ALIGN', (0, 1), (0, -1), 'CENTER'),  # Referencia centrada
             ('ALIGN', (1, 1), (1, -1), 'LEFT'),    # Descripción a la izquierda
             ('ALIGN', (2, 1), (2, -1), 'LEFT'),    # Acabado a la izquierda
@@ -389,11 +389,11 @@ class GeneradorCotizacionesMadera:
             ('BOX', (0, 0), (-1, -1), 1, colors.black),
             ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.black),
             
-            # Padding aumentado para mejor legibilidad
-            ('LEFTPADDING', (0, 0), (-1, -1), 8),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-            ('TOPPADDING', (0, 0), (-1, -1), 8),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            # Padding reducido para ahorrar espacio
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
             
             # Ajuste vertical para mejor distribución del texto
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -412,18 +412,18 @@ class GeneradorCotizacionesMadera:
         
         totales_data.append(['', 'Total:', cotizacion['resumen']['total']])
         
-        totales_table = Table(totales_data, colWidths=[4.7*inch, 1.8*inch, 1.3*inch])
+        totales_table = Table(totales_data, colWidths=[3.5*inch, 1.5*inch, 1.5*inch])
         totales_table.setStyle(TableStyle([
             ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
             ('FONTNAME', (1, 0), (-1, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (1, 0), (-1, -1), 11),
+            ('FONTSIZE', (1, 0), (-1, -1), 9),  # Fuente más pequeña
             ('BOX', (1, 0), (-1, -1), 1, colors.black),
             ('INNERGRID', (1, 0), (-1, -1), 0.5, colors.black),
             ('BACKGROUND', (1, -1), (-1, -1), colors.lightgrey),  # Destacar total
-            ('LEFTPADDING', (1, 0), (-1, -1), 10),
-            ('RIGHTPADDING', (1, 0), (-1, -1), 10),
-            ('TOPPADDING', (1, 0), (-1, -1), 8),
-            ('BOTTOMPADDING', (1, 0), (-1, -1), 8),
+            ('LEFTPADDING', (1, 0), (-1, -1), 6),  # Padding reducido
+            ('RIGHTPADDING', (1, 0), (-1, -1), 6),
+            ('TOPPADDING', (1, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (1, 0), (-1, -1), 6),
         ]))
         
         story.append(totales_table)
@@ -451,12 +451,12 @@ class GeneradorCotizacionesMadera:
             ['_________________', '_________________', '_________________']
         ]
         
-        firmas_table = Table(firmas_data, colWidths=[2.6*inch, 2.6*inch, 2.6*inch])
+        firmas_table = Table(firmas_data, colWidths=[2.2*inch, 2.2*inch, 2.2*inch])
         firmas_table.setStyle(TableStyle([
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('TOPPADDING', (0, 0), (-1, -1), 20),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),  # Fuente más pequeña
+            ('TOPPADDING', (0, 0), (-1, -1), 15),
         ]))
         
         story.append(firmas_table)
