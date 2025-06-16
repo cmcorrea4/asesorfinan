@@ -4,6 +4,14 @@ import numpy as np
 from datetime import datetime, timedelta
 import re
 from io import BytesIO
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch, mm
+from reportlab.pdfgen import canvas
+from reportlab.graphics.shapes import Drawing, Rect
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 
 class GeneradorCotizacionesMadera:
     def __init__(self):
@@ -207,6 +215,245 @@ class GeneradorCotizacionesMadera:
         fecha = datetime.now()
         timestamp = str(int(fecha.timestamp()))[-6:]
         return f"COT-MAD-{fecha.strftime('%Y%m')}-{timestamp}"
+    
+    def generar_pdf_cotizacion(self, cotizacion, datos_empresa=None):
+        """Generar PDF de la cotización con formato profesional"""
+        buffer = BytesIO()
+        
+        # Configuración de la página
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            rightMargin=20*mm,
+            leftMargin=20*mm,
+            topMargin=20*mm,
+            bottomMargin=20*mm
+        )
+        
+        # Estilos
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=16,
+            textColor=colors.black,
+            spaceAfter=12,
+            alignment=TA_CENTER,
+            fontName='Helvetica-Bold'
+        )
+        
+        header_style = ParagraphStyle(
+            'HeaderStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=colors.black,
+            alignment=TA_LEFT,
+            fontName='Helvetica'
+        )
+        
+        # Datos de empresa por defecto
+        if datos_empresa is None:
+            datos_empresa = {
+                'nombre': 'Tu Empresa de Productos de Madera',
+                'nit': '900.XXX.XXX-X',
+                'direccion': 'Calle XX # XX - XX',
+                'telefono': 'XXX-XXXX',
+                'ciudad': 'Medellín',
+                'email': 'ventas@tuempresa.com'
+            }
+        
+        # Contenido del PDF
+        story = []
+        
+        # HEADER DE LA EMPRESA
+        header_data = [
+            [
+                Paragraph(f"""
+                <b>{datos_empresa['nombre']}</b><br/>
+                NIT: {datos_empresa['nit']}<br/>
+                {datos_empresa['direccion']}<br/>
+                Tel: {datos_empresa['telefono']}<br/>
+                {datos_empresa['ciudad']}
+                """, header_style),
+                Paragraph(f"""
+                <b>COTIZACIÓN</b><br/>
+                No. {cotizacion['numero_cotizacion']}
+                """, ParagraphStyle(
+                    'HeaderRight',
+                    parent=styles['Normal'],
+                    fontSize=12,
+                    textColor=colors.black,
+                    alignment=TA_CENTER,
+                    fontName='Helvetica-Bold'
+                ))
+            ]
+        ]
+        
+        header_table = Table(header_data, colWidths=[4*inch, 2*inch])
+        header_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BOX', (1, 0), (1, 0), 1, colors.black),
+            ('INNERGRID', (1, 0), (1, 0), 1, colors.black),
+        ]))
+        
+        story.append(header_table)
+        story.append(Spacer(1, 20))
+        
+        # TÍTULO
+        story.append(Paragraph("COTIZACIÓN DE VENTAS", title_style))
+        story.append(Spacer(1, 15))
+        
+        # INFORMACIÓN DEL CLIENTE Y COTIZACIÓN
+        cliente_data = [
+            [
+                Paragraph(f"""
+                <b>Cliente</b><br/>
+                <b>Nombre:</b> {cotizacion['cliente']['nombre']}<br/>
+                <b>Empresa:</b> {cotizacion['cliente'].get('empresa', 'N/A')}<br/>
+                <b>Teléfono:</b> {cotizacion['cliente'].get('telefono', 'N/A')}<br/>
+                <b>Email:</b> {cotizacion['cliente'].get('email', 'N/A')}
+                """, header_style),
+                Paragraph(f"""
+                <b>Fecha:</b> {cotizacion['fecha']}<br/>
+                <b>Vencimiento:</b> {cotizacion['fecha_vencimiento']}<br/>
+                <b>Ubicación:</b> {cotizacion['ubicacion']}<br/>
+                <b>IVA incluido:</b> {'Sí' if cotizacion['incluye_iva'] else 'No'}
+                """, header_style)
+            ]
+        ]
+        
+        cliente_table = Table(cliente_data, colWidths=[3*inch, 3*inch])
+        cliente_table.setStyle(TableStyle([
+            ('BOX', (0, 0), (-1, -1), 1, colors.black),
+            ('INNERGRID', (0, 0), (-1, -1), 1, colors.black),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        
+        story.append(cliente_table)
+        story.append(Spacer(1, 20))
+        
+        # TABLA DE PRODUCTOS
+        # Headers
+        productos_headers = [
+            'Referencia', 'Descripción', 'Acabado', 'Cantidad', 
+            'Precio Unitario', 'Total'
+        ]
+        
+        # Datos de productos
+        productos_data = [productos_headers]
+        
+        for item in cotizacion['items']:
+            productos_data.append([
+                item['referencia'],
+                item['descripcion'][:30] + '...' if len(item['descripcion']) > 30 else item['descripcion'],
+                item['acabado'][:15] + '...' if len(item['acabado']) > 15 else item['acabado'],
+                str(item['cantidad']),
+                item['precio_unitario'],
+                item['total']
+            ])
+        
+        # Crear tabla de productos
+        productos_table = Table(
+            productos_data, 
+            colWidths=[0.8*inch, 2.2*inch, 1.2*inch, 0.6*inch, 1*inch, 1*inch]
+        )
+        
+        productos_table.setStyle(TableStyle([
+            # Header
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            
+            # Datos
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('ALIGN', (3, 1), (3, -1), 'CENTER'),  # Cantidad centrada
+            ('ALIGN', (4, 1), (-1, -1), 'RIGHT'),  # Precios a la derecha
+            
+            # Bordes
+            ('BOX', (0, 0), (-1, -1), 1, colors.black),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.black),
+            
+            # Padding
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        
+        story.append(productos_table)
+        story.append(Spacer(1, 20))
+        
+        # TOTALES
+        totales_data = [
+            ['', 'Valor Subtotal:', cotizacion['resumen']['subtotal']],
+        ]
+        
+        if cotizacion['resumen']['descuento']:
+            totales_data.append(['', 'Descuento:', cotizacion['resumen']['descuento']])
+        
+        totales_data.append(['', 'Total:', cotizacion['resumen']['total']])
+        
+        totales_table = Table(totales_data, colWidths=[3*inch, 1.5*inch, 1.5*inch])
+        totales_table.setStyle(TableStyle([
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (1, 0), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (1, 0), (-1, -1), 10),
+            ('BOX', (1, 0), (-1, -1), 1, colors.black),
+            ('INNERGRID', (1, 0), (-1, -1), 0.5, colors.black),
+            ('BACKGROUND', (1, -1), (-1, -1), colors.lightgrey),  # Destacar total
+            ('LEFTPADDING', (1, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (1, 0), (-1, -1), 8),
+            ('TOPPADDING', (1, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (1, 0), (-1, -1), 6),
+        ]))
+        
+        story.append(totales_table)
+        story.append(Spacer(1, 30))
+        
+        # CONDICIONES GENERALES
+        if cotizacion.get('condiciones'):
+            story.append(Paragraph("<b>Condiciones Generales:</b>", 
+                                 ParagraphStyle('ConditionsTitle', parent=styles['Normal'], 
+                                              fontSize=10, fontName='Helvetica-Bold')))
+            story.append(Spacer(1, 8))
+            
+            for condicion in cotizacion['condiciones']:
+                story.append(Paragraph(f"• {condicion}", 
+                                     ParagraphStyle('Condition', parent=styles['Normal'], 
+                                                  fontSize=9, leftIndent=10)))
+            
+            story.append(Spacer(1, 20))
+        
+        # FIRMAS
+        firmas_data = [
+            ['Elaborado', 'Aprobado', 'Recibido'],
+            ['', '', ''],
+            ['', '', ''],
+            ['_________________', '_________________', '_________________']
+        ]
+        
+        firmas_table = Table(firmas_data, colWidths=[2*inch, 2*inch, 2*inch])
+        firmas_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('TOPPADDING', (0, 0), (-1, -1), 15),
+        ]))
+        
+        story.append(firmas_table)
+        
+        # Generar PDF
+        doc.build(story)
+        buffer.seek(0)
+        return buffer
     
     def obtener_condiciones_generales(self):
         """Condiciones generales de la cotización"""
@@ -448,6 +695,109 @@ def main():
                 
                 # Mostrar cotización
                 st.success("✅ Cotización generada exitosamente!")
+                
+                # Guardar cotización en session_state para descargar PDF
+                st.session_state.ultima_cotizacion = cotizacion
+                
+                # Botones de acción
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    # Botón para descargar PDF
+                    if st.button("📄 Descargar PDF", type="primary"):
+                        try:
+                            pdf_buffer = st.session_state.generador.generar_pdf_cotizacion(cotizacion)
+                            st.download_button(
+                                label="⬇️ Descargar Cotización PDF",
+                                data=pdf_buffer.getvalue(),
+                                file_name=f"Cotizacion_{cotizacion['numero_cotizacion']}.pdf",
+                                mime="application/pdf"
+                            )
+                        except Exception as e:
+                            st.error(f"Error al generar PDF: {str(e)}")
+                
+                with col2:
+                    if st.button("🗑️ Nueva Cotización"):
+                        st.session_state.productos_cotizacion = []
+                        st.experimental_rerun()
+                
+                with col3:
+                    # Configurar datos de empresa para PDF
+                    if st.button("⚙️ Configurar Empresa"):
+                        st.session_state.mostrar_config_empresa = True
+                
+                # Configuración de empresa (modal)
+                if st.session_state.get('mostrar_config_empresa', False):
+                    st.markdown("---")
+                    st.subheader("🏢 Configuración de Empresa para PDF")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        nombre_empresa = st.text_input("Nombre de la empresa:", 
+                                                     value=st.session_state.get('empresa_nombre', 'Tu Empresa de Productos de Madera'))
+                        nit_empresa = st.text_input("NIT:", 
+                                                   value=st.session_state.get('empresa_nit', '900.XXX.XXX-X'))
+                        direccion_empresa = st.text_input("Dirección:", 
+                                                         value=st.session_state.get('empresa_direccion', 'Calle XX # XX - XX'))
+                    
+                    with col2:
+                        telefono_empresa = st.text_input("Teléfono:", 
+                                                       value=st.session_state.get('empresa_telefono', 'XXX-XXXX'))
+                        ciudad_empresa = st.text_input("Ciudad:", 
+                                                     value=st.session_state.get('empresa_ciudad', 'Medellín'))
+                        email_empresa = st.text_input("Email:", 
+                                                    value=st.session_state.get('empresa_email', 'ventas@tuempresa.com'))
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if st.button("💾 Guardar Configuración"):
+                            st.session_state.empresa_nombre = nombre_empresa
+                            st.session_state.empresa_nit = nit_empresa
+                            st.session_state.empresa_direccion = direccion_empresa
+                            st.session_state.empresa_telefono = telefono_empresa
+                            st.session_state.empresa_ciudad = ciudad_empresa
+                            st.session_state.empresa_email = email_empresa
+                            st.session_state.mostrar_config_empresa = False
+                            st.success("✅ Configuración guardada")
+                            st.experimental_rerun()
+                    
+                    with col2:
+                        if st.button("❌ Cancelar"):
+                            st.session_state.mostrar_config_empresa = False
+                            st.experimental_rerun()
+                    
+                    st.markdown("---")
+                
+                # Generar PDF con datos de empresa configurados si existen
+                datos_empresa_pdf = None
+                if any(key.startswith('empresa_') for key in st.session_state.keys()):
+                    datos_empresa_pdf = {
+                        'nombre': st.session_state.get('empresa_nombre', 'Tu Empresa de Productos de Madera'),
+                        'nit': st.session_state.get('empresa_nit', '900.XXX.XXX-X'),
+                        'direccion': st.session_state.get('empresa_direccion', 'Calle XX # XX - XX'),
+                        'telefono': st.session_state.get('empresa_telefono', 'XXX-XXXX'),
+                        'ciudad': st.session_state.get('empresa_ciudad', 'Medellín'),
+                        'email': st.session_state.get('empresa_email', 'ventas@tuempresa.com')
+                    }
+                
+                # Botón alternativo para descargar PDF si ya se configuró empresa
+                if datos_empresa_pdf and not st.session_state.get('mostrar_config_empresa', False):
+                    if st.button("📄 Generar PDF con datos de empresa"):
+                        try:
+                            pdf_buffer = st.session_state.generador.generar_pdf_cotizacion(cotizacion, datos_empresa_pdf)
+                            st.download_button(
+                                label="⬇️ Descargar Cotización PDF Personalizada",
+                                data=pdf_buffer.getvalue(),
+                                file_name=f"Cotizacion_{cotizacion['numero_cotizacion']}.pdf",
+                                mime="application/pdf",
+                                key="download_custom_pdf"
+                            )
+                        except Exception as e:
+                            st.error(f"Error al generar PDF: {str(e)}")
+                
+                st.markdown("---")
                 
                 # Información de la cotización
                 st.subheader(f"📄 Cotización {cotizacion['numero_cotizacion']}")
