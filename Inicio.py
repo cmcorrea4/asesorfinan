@@ -1,879 +1,879 @@
 import streamlit as st
-import requests
-import json
-import time
-import tempfile
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
 import re
-from datetime import datetime
-from fpdf import FPDF
+from io import BytesIO
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch, mm
+from reportlab.pdfgen import canvas
+from reportlab.graphics.shapes import Drawing, Rect
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 
-# Configuración de la página sin el parámetro theme (compatible con versiones anteriores)
-st.set_page_config(
-    page_title="Asistente Digital",
-    page_icon="🌲",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-    menu_items=None
-)
-
-# Establecer tema oscuro mediante CSS personalizado para versiones anteriores
-st.markdown("""
-<style>
-    /* Tema oscuro personalizado para versiones anteriores de Streamlit */
-    body {
-        color: #fafafa;
-        background-color: #0e1117;
-    }
-    .stApp {
-        background-color: #0e1117;
-    }
-    .stTextInput>div>div>input {
-        background-color: #262730;
-        color: white;
-    }
-    .stSlider>div>div>div {
-        color: white;
-    }
-    .stSelectbox>div>div>div {
-        background-color: #262730;
-        color: white;
-    }
-    .css-1d391kg, .css-12oz5g7 {
-        background-color: #262730;
-    }
-    
-    /* Estilos personalizados para el asistente - Todos los títulos en BLANCO */
-    .main-header {
-        font-size: 2.5rem;
-        color: #FFFFFF;
-        text-align: center;
-        margin-bottom: 2rem;
-        font-weight: bold;
-        text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
-    }
-    .subheader {
-        font-size: 1.5rem;
-        color: #FFFFFF;
-        margin-bottom: 1rem;
-    }
-    .footer {
-        position: fixed;
-        bottom: 0;
-        width: 100%;
-        background-color: #0e1117;
-        text-align: center;
-        padding: 10px;
-        font-size: 0.8rem;
-    }
-    /* Asegurar que todos los títulos en la barra lateral también sean blancos */
-    .sidebar .sidebar-content h1, 
-    .sidebar .sidebar-content h2, 
-    .sidebar .sidebar-content h3,
-    .css-1outpf7 {
-        color: #FFFFFF !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Función para inicializar variables de sesión
-def initialize_session_vars():
-    if "is_configured" not in st.session_state:
-        st.session_state.is_configured = False
-    if "agent_endpoint" not in st.session_state:
-        # Endpoint fijo como solicitado
-        st.session_state.agent_endpoint = "https://vs3sawqsrcx6yzud3roifshn.agents.do-ai.run"
-    if "agent_access_key" not in st.session_state:
-        st.session_state.agent_access_key = ""
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "last_cotization_data" not in st.session_state:
-        st.session_state.last_cotization_data = None
-
-# Inicializar variables
-initialize_session_vars()
-
-# Función mejorada para extraer datos de cotización de la respuesta del LLM
-def extract_cotization_data(response_text):
-    """Extrae datos de productos de la respuesta del LLM - Versión mejorada"""
-    cotization_data = {
-        'items': [],
-        'subtotal': 0,
-        'impuestos': 0,
-        'total': 0,
-        'cliente': 'CONSUMIDOR FINAL',
-        'fecha': datetime.now().strftime('%d/%m/%Y'),
-        'numero_cotizacion': f"CCV-{int(time.time())}"[-8:]
-    }
-    
-    # Normalizar texto
-    text_lower = response_text.lower()
-    
-    # Patrones más amplios para encontrar precios
-    price_patterns = [
-        r'(\d{1,3}(?:[.,]\d{3})+)\s*cop',  # 51,792 COP
-        r'\$\s*(\d{1,3}(?:[.,]\d{3})+)',   # $51,792
-        r'precio.*?(\d{1,3}(?:[.,]\d{3})+)',  # precio ... 51,792
-        r'cuesta.*?(\d{1,3}(?:[.,]\d{3})+)',  # cuesta ... 51,792
-        r'(\d{1,3}(?:[.,]\d{3})+)\s*pesos',   # 51,792 pesos
-        r'es\s+de\s+(\d{1,3}(?:[.,]\d{3})+)', # es de 51,792
-        r'total.*?(\d{1,3}(?:[.,]\d{3})+)',   # total ... 155,376
-        r'subtotal.*?(\d{1,3}(?:[.,]\d{3})+)', # subtotal ... 155,376
-        r'vale.*?(\d{1,3}(?:[.,]\d{3})+)',    # vale ... 51,792
-        r'por\s+(\d{1,3}(?:[.,]\d{3})+)',     # por 51,792
-        # Patrones para números sin separadores pero grandes
-        r'\b(\d{5,7})\b',  # 51792, 155376
-    ]
-    
-    # Patrones para cantidades
-    quantity_patterns = [
-        r'para\s+(\d+)\s+(?:alfardas|unidades|productos|items)',
-        r'(\d+)\s+(?:alfardas|unidades|uds?)\b',
-        r'cantidad.*?(\d+)',
-        r'(\d+)\s*x\s*',  # 3 x
-        r'x\s*(\d+)',     # x 3
-        r'(\d+)\s+(?:alfardas|pisos|paredes|tablas)',
-    ]
-    
-    # Buscar precios
-    precios_encontrados = []
-    for pattern in price_patterns:
-        matches = re.findall(pattern, text_lower)
-        for match in matches:
-            # Limpiar el número
-            precio_str = match.replace(',', '').replace('.', '')
-            try:
-                precio = int(precio_str)
-                # Validar que sea un precio razonable
-                if 1000 <= precio <= 50000000:
-                    precios_encontrados.append(precio)
-            except ValueError:
-                continue
-    
-    # Buscar cantidades
-    cantidades_encontradas = []
-    for pattern in quantity_patterns:
-        matches = re.findall(pattern, text_lower)
-        for match in matches:
-            try:
-                cantidad = int(match)
-                if 1 <= cantidad <= 1000:
-                    cantidades_encontradas.append(cantidad)
-            except ValueError:
-                continue
-    
-    # Determinar producto basándose en el texto
-    descripcion = "PRODUCTO"
-    referencia = "REF001"
-    
-    if 'alfarda' in text_lower:
-        if '12x300' in text_lower or ('12' in text_lower and '300' in text_lower):
-            descripcion = "ALFARDA TRATADA 12X300"
-            referencia = "RA40012300"
-        else:
-            descripcion = "ALFARDA TRATADA"
-            referencia = "RA001"
-    elif 'piso' in text_lower and 'pared' in text_lower:
-        if '10x1.7x100' in text_lower:
-            descripcion = "PISO PARED 10X1.7X100M2 CEP"
-            referencia = "PP10017100"
-        else:
-            descripcion = "PISO PARED"
-            referencia = "PP001"
-    elif any(word in text_lower for word in ['madera', 'tabla', 'listón', 'tablón']):
-        descripcion = "MADERA TRATADA"
-        referencia = "MT001"
-    elif any(word in text_lower for word in ['viga', 'vigas']):
-        descripcion = "VIGA TRATADA"
-        referencia = "VT001"
-    
-    # Si encontramos al menos un precio, crear el item
-    if precios_encontrados:
-        # Usar el precio más relevante
-        precios_ordenados = sorted(set(precios_encontrados))
-        precio_unitario = precios_ordenados[0]  # El menor suele ser el unitario
-        
-        # Usar cantidad si se encontró, sino usar 1
-        cantidad = cantidades_encontradas[0] if cantidades_encontradas else 1
-        
-        # Calcular total
-        total_calculado = precio_unitario * cantidad
-        
-        # Si hay múltiples precios, verificar si alguno corresponde al total
-        if len(precios_ordenados) > 1:
-            for precio in precios_ordenados[1:]:
-                # Si encontramos un precio que podría ser el total
-                if abs(precio - total_calculado) <= total_calculado * 0.1:  # 10% tolerancia
-                    total_calculado = precio
-                    break
-                elif precio > precio_unitario * cantidad:
-                    # Podría ser el total, recalcular precio unitario
-                    total_calculado = precio
-                    if cantidad > 1:
-                        precio_unitario = precio // cantidad
-        
-        item = {
-            'referencia': referencia,
-            'descripcion': descripcion,
-            'cantidad': cantidad,
-            'precio_unitario': precio_unitario,
-            'impuestos': 0,
-            'valor_total': total_calculado,
-            'peso': 186
+class GeneradorCotizacionesMadera:
+    def __init__(self):
+        self.productos = None
+        self.ubicaciones = {
+            'caldas': {
+                'sin_iva': 'PRECIO CALDAS',
+                'con_iva': 'PRECIO CALDAS CON IVA'
+            },
+            'chagualo': {
+                'sin_iva': 'PRECIO CHAGUALO, GIRARDOTA, SAN CRISTOBAL',
+                'con_iva': 'PRECIO CHAGUALO, GIRARDOTA, SAN CRISTOBAL IVA INCLUIDO'
+            }
         }
         
-        cotization_data['items'].append(item)
-        cotization_data['subtotal'] = total_calculado
-        cotization_data['impuestos'] = 0
-        cotization_data['total'] = total_calculado
+    def cargar_excel(self, archivo_excel):
+        """Cargar productos desde archivo Excel"""
+        try:
+            # Leer el archivo Excel
+            df = pd.read_excel(archivo_excel, engine='openpyxl')
+            
+            # Limpiar nombres de columnas
+            df.columns = df.columns.str.strip()
+            
+            # Filtrar filas con referencia y descripción válidas
+            df = df.dropna(subset=['Referencia', 'DESCRIPCION'])
+            df = df[df['Referencia'].str.strip() != '']
+            df = df[df['DESCRIPCION'].str.strip() != '']
+            
+            # Limpiar precios (convertir a numérico)
+            columnas_precio = [
+                'PRECIO CALDAS',
+                'PRECIO CALDAS CON IVA',
+                'PRECIO CHAGUALO, GIRARDOTA, SAN CRISTOBAL',
+                'PRECIO CHAGUALO, GIRARDOTA, SAN CRISTOBAL IVA INCLUIDO'
+            ]
+            
+            for col in columnas_precio:
+                if col in df.columns:
+                    df[col] = df[col].apply(self.limpiar_precio)
+            
+            self.productos = df
+            
+            return {
+                'exito': True,
+                'total_productos': len(df),
+                'mensaje': f'Excel cargado exitosamente con {len(df)} productos',
+                'columnas': list(df.columns)
+            }
+        except Exception as e:
+            return {
+                'exito': False,
+                'error': str(e),
+                'mensaje': 'Error al cargar el archivo Excel'
+            }
     
-    return cotization_data
-
-# Función para generar PDF de cotización
-def generate_cotization_pdf(cotization_data):
-    """Genera un PDF de cotización similar al formato de la imagen"""
-    try:
-        # Crear PDF con orientación vertical y márgenes ajustados
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_auto_page_break(auto=True, margin=10)
+    def limpiar_precio(self, precio):
+        """Limpiar y convertir precio a número"""
+        if pd.isna(precio):
+            return 0
         
-        # Encabezado de la empresa - más compacto
-        pdf.set_font("Arial", 'B', 11)
-        pdf.cell(0, 6, "Construcciones Inmunizadas De Colombia", ln=True, align='C')
-        pdf.set_font("Arial", size=8)
-        pdf.cell(0, 4, "Nit: 900297110", ln=True, align='C')
-        pdf.cell(0, 4, "Cra 58 64 10", ln=True, align='C')
-        pdf.cell(0, 4, "Tel: 4075014 Fax:", ln=True, align='C')
-        pdf.ln(3)
+        # Convertir a string y limpiar
+        precio_str = str(precio)
+        # Remover caracteres no numéricos excepto punto y coma
+        precio_limpio = re.sub(r'[^\d.,]', '', precio_str)
+        # Remover comas (separadores de miles)
+        precio_limpio = precio_limpio.replace(',', '')
         
-        # Título COTIZACIONES
-        pdf.set_font("Arial", 'B', 12)
-        pdf.cell(0, 6, "COTIZACIONES", ln=True, align='C')
-        pdf.set_font("Arial", 'B', 9)
-        pdf.cell(0, 5, f"No. {cotization_data['numero_cotizacion']}", ln=True, align='C')
-        pdf.ln(2)
+        try:
+            return float(precio_limpio)
+        except:
+            return 0
+    
+    def formatear_precio(self, precio):
+        """Formatear precio como moneda colombiana"""
+        if pd.isna(precio) or precio == 0:
+            return "$ 0"
+        return f"$ {precio:,.0f}".replace(',', '.')
+    
+    def buscar_productos(self, termino_busqueda, ubicacion='caldas', incluir_iva=True, limite=10):
+        """Buscar productos por descripción"""
+        if self.productos is None or self.productos.empty:
+            return {
+                'exito': False,
+                'mensaje': 'No hay productos cargados'
+            }
         
-        # COTIZACIÓN DE VENTAS
-        pdf.set_font("Arial", 'B', 10)
-        pdf.cell(0, 6, "COTIZACION DE VENTAS", ln=True, align='C')
-        pdf.ln(3)
+        # Filtrar productos que contengan el término de búsqueda
+        mask = self.productos['DESCRIPCION'].str.contains(
+            termino_busqueda, 
+            case=False, 
+            na=False
+        )
+        resultados = self.productos[mask].head(limite)
         
-        # Información del cliente y fecha en dos columnas
-        y_start = pdf.get_y()
+        if resultados.empty:
+            return {
+                'exito': False,
+                'mensaje': f'No se encontraron productos para: {termino_busqueda}'
+            }
         
-        # Cliente (lado izquierdo) - más compacto
-        pdf.set_font("Arial", 'B', 9)
-        pdf.cell(35, 5, "Cliente", ln=True)
-        pdf.set_font("Arial", size=7)
-        pdf.cell(15, 4, "Nombre:", ln=False)
-        pdf.cell(55, 4, cotization_data['cliente'], ln=True)
-        pdf.cell(15, 4, "Dirección:", ln=False)
-        pdf.cell(55, 4, "CR 58 64 10", ln=True)
-        pdf.cell(15, 4, "Ciudad:", ln=False)
-        pdf.cell(55, 4, "Medellín", ln=True)
-        pdf.cell(15, 4, "Teléfono:", ln=False)
-        pdf.cell(55, 4, "4075014", ln=True)
+        # Formatear resultados
+        productos_formateados = []
+        for _, producto in resultados.iterrows():
+            producto_formateado = self.formatear_producto(producto, ubicacion, incluir_iva)
+            productos_formateados.append(producto_formateado)
         
-        # Información de fecha (lado derecho)
-        pdf.set_xy(110, y_start)
-        pdf.set_font("Arial", size=7)
-        pdf.cell(15, 4, "Fecha:", ln=False)
-        pdf.cell(25, 4, cotization_data['fecha'], ln=True)
-        pdf.set_x(110)
-        pdf.cell(15, 4, "No. pedido:", ln=False)
-        pdf.cell(25, 4, "C01", ln=True)
-        pdf.set_x(110)
-        pdf.cell(15, 4, "Forma pago:", ln=False)
-        pdf.cell(25, 4, "CONSTRUCCIONES", ln=True)
-        pdf.set_x(110)
-        pdf.cell(15, 4, "Vendedor:", ln=False)
-        pdf.cell(25, 4, "CONSTRUCCIONES", ln=True)
+        return {
+            'exito': True,
+            'resultados': productos_formateados,
+            'total': len(productos_formateados)
+        }
+    
+    def formatear_producto(self, producto, ubicacion='caldas', incluir_iva=True):
+        """Formatear un producto con toda la información"""
+        ubicacion_config = self.ubicaciones[ubicacion]
+        columna_precio = ubicacion_config['con_iva'] if incluir_iva else ubicacion_config['sin_iva']
         
-        pdf.ln(6)
+        precio = producto.get(columna_precio, 0)
         
-        # Tabla de productos - anchos ajustados para evitar desbordamiento
-        pdf.set_font("Arial", 'B', 6)
-        headers = ["Ref.", "Descripción", "U.M.", "Cant.", "Precio unit.", "Total"]
-        # Reducir columnas y ajustar anchos - Total: 170 (cabe bien en 190)
-        widths = [18, 60, 15, 15, 30, 32]
+        return {
+            'referencia': producto.get('Referencia', ''),
+            'descripcion': producto.get('DESCRIPCION', ''),
+            'acabado': producto.get('ACABADO DE LA MADERA', ''),
+            'uso': producto.get('USO', ''),
+            'garantia': producto.get('GARANTIA', ''),
+            'ubicacion': ubicacion,
+            'incluir_iva': incluir_iva,
+            'precio': self.formatear_precio(precio),
+            'precio_numerico': precio,
+            'precios': {
+                'caldas_sin_iva': producto.get('PRECIO CALDAS', 0),
+                'caldas_con_iva': producto.get('PRECIO CALDAS CON IVA', 0),
+                'chagualo_sin_iva': producto.get('PRECIO CHAGUALO, GIRARDOTA, SAN CRISTOBAL', 0),
+                'chagualo_con_iva': producto.get('PRECIO CHAGUALO, GIRARDOTA, SAN CRISTOBAL IVA INCLUIDO', 0)
+            }
+        }
+    
+    def generar_cotizacion(self, productos_seleccionados, datos_cliente, opciones=None):
+        """Generar cotización completa"""
+        if opciones is None:
+            opciones = {}
+            
+        ubicacion = opciones.get('ubicacion', 'caldas')
+        incluir_iva = opciones.get('incluir_iva', True)
+        descuento_porcentaje = opciones.get('descuento', 0)
+        validez_dias = opciones.get('validez_dias', 30)
         
-        # Dibujar encabezados
-        x_start = 10  # Empezar más a la izquierda
-        pdf.set_x(x_start)
-        for i, header in enumerate(headers):
-            pdf.cell(widths[i], 7, header, 1, 0, 'C')
-        pdf.ln()
+        subtotal = 0
+        items_cotizacion = []
+        
+        for item in productos_seleccionados:
+            cantidad = item.get('cantidad', 1)
+            precio_unitario = item['precio_numerico']
+            total_item = cantidad * precio_unitario
+            subtotal += total_item
+            
+            items_cotizacion.append({
+                'referencia': item['referencia'],
+                'descripcion': item['descripcion'],
+                'acabado': item['acabado'],
+                'uso': item['uso'],
+                'garantia': item['garantia'],
+                'cantidad': cantidad,
+                'precio_unitario': self.formatear_precio(precio_unitario),
+                'total': self.formatear_precio(total_item),
+                'precio_unitario_numerico': precio_unitario,
+                'total_numerico': total_item
+            })
+        
+        # Calcular totales
+        valor_descuento = subtotal * (descuento_porcentaje / 100)
+        total = subtotal - valor_descuento
+        
+        fecha_actual = datetime.now()
+        fecha_vencimiento = fecha_actual + timedelta(days=validez_dias)
+        
+        ubicacion_texto = 'Caldas' if ubicacion == 'caldas' else 'Chagualo, Girardota, San Cristóbal'
+        
+        return {
+            'numero_cotizacion': self.generar_numero_cotizacion(),
+            'fecha': fecha_actual.strftime('%d/%m/%Y'),
+            'fecha_vencimiento': fecha_vencimiento.strftime('%d/%m/%Y'),
+            'cliente': datos_cliente,
+            'ubicacion': ubicacion_texto,
+            'incluye_iva': incluir_iva,
+            'items': items_cotizacion,
+            'resumen': {
+                'subtotal': self.formatear_precio(subtotal),
+                'descuento': f'{descuento_porcentaje}% - {self.formatear_precio(valor_descuento)}' if descuento_porcentaje > 0 else None,
+                'total': self.formatear_precio(total),
+                'subtotal_numerico': subtotal,
+                'descuento_numerico': valor_descuento,
+                'total_numerico': total
+            },
+            'condiciones': self.obtener_condiciones_generales()
+        }
+    
+    def generar_numero_cotizacion(self):
+        """Generar número único de cotización"""
+        fecha = datetime.now()
+        timestamp = str(int(fecha.timestamp()))[-6:]
+        return f"COT-MAD-{fecha.strftime('%Y%m')}-{timestamp}"
+    
+    def generar_pdf_cotizacion(self, cotizacion, datos_empresa=None):
+        """Generar PDF de la cotización con formato profesional"""
+        buffer = BytesIO()
+        
+        # Configuración de la página con márgenes equilibrados
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            rightMargin=15*mm,
+            leftMargin=15*mm,
+            topMargin=15*mm,
+            bottomMargin=15*mm
+        )
+        
+        # Estilos
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=16,
+            textColor=colors.black,
+            spaceAfter=12,
+            alignment=TA_CENTER,
+            fontName='Helvetica-Bold'
+        )
+        
+        header_style = ParagraphStyle(
+            'HeaderStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=colors.black,
+            alignment=TA_LEFT,
+            fontName='Helvetica'
+        )
+        
+        # Datos de empresa por defecto
+        if datos_empresa is None:
+            datos_empresa = {
+                'nombre': 'Tu Empresa de Productos de Madera',
+                'nit': '900.XXX.XXX-X',
+                'direccion': 'Calle XX # XX - XX',
+                'telefono': 'XXX-XXXX',
+                'ciudad': 'Medellín',
+                'email': 'ventas@tuempresa.com'
+            }
+        
+        # Contenido del PDF
+        story = []
+        
+        # HEADER DE LA EMPRESA
+        header_data = [
+            [
+                Paragraph(f"""
+                <b>{datos_empresa['nombre']}</b><br/>
+                NIT: {datos_empresa['nit']}<br/>
+                {datos_empresa['direccion']}<br/>
+                Tel: {datos_empresa['telefono']}<br/>
+                {datos_empresa['ciudad']}
+                """, header_style),
+                Paragraph(f"""
+                <b>COTIZACIÓN</b><br/>
+                No. {cotizacion['numero_cotizacion']}
+                """, ParagraphStyle(
+                    'HeaderRight',
+                    parent=styles['Normal'],
+                    fontSize=12,
+                    textColor=colors.black,
+                    alignment=TA_CENTER,
+                    fontName='Helvetica-Bold'
+                ))
+            ]
+        ]
+        
+        header_table = Table(header_data, colWidths=[4.2*inch, 2.5*inch])
+        header_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BOX', (1, 0), (1, 0), 1.5, colors.black),
+            ('INNERGRID', (1, 0), (1, 0), 1.5, colors.black),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        
+        story.append(header_table)
+        story.append(Spacer(1, 20))
+        
+        # TÍTULO
+        story.append(Paragraph("COTIZACIÓN DE VENTAS", title_style))
+        story.append(Spacer(1, 15))
+        
+        # INFORMACIÓN DEL CLIENTE Y COTIZACIÓN
+        cliente_data = [
+            [
+                Paragraph(f"""
+                <b>Cliente</b><br/>
+                <b>Nombre:</b> {cotizacion['cliente']['nombre']}<br/>
+                <b>Empresa:</b> {cotizacion['cliente'].get('empresa', 'N/A')}<br/>
+                <b>Teléfono:</b> {cotizacion['cliente'].get('telefono', 'N/A')}<br/>
+                <b>Email:</b> {cotizacion['cliente'].get('email', 'N/A')}
+                """, header_style),
+                Paragraph(f"""
+                <b>Fecha:</b> {cotizacion['fecha']}<br/>
+                <b>Vencimiento:</b> {cotizacion['fecha_vencimiento']}<br/>
+                <b>Ubicación:</b> {cotizacion['ubicacion']}<br/>
+                <b>IVA incluido:</b> {'Sí' if cotizacion['incluye_iva'] else 'No'}
+                """, header_style)
+            ]
+        ]
+        
+        cliente_table = Table(cliente_data, colWidths=[3.3*inch, 3.3*inch])
+        cliente_table.setStyle(TableStyle([
+            ('BOX', (0, 0), (-1, -1), 1, colors.black),
+            ('INNERGRID', (0, 0), (-1, -1), 1, colors.black),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+        ]))
+        
+        story.append(cliente_table)
+        story.append(Spacer(1, 20))
+        
+        # TABLA DE PRODUCTOS
+        # Headers - mantenemos los 5 campos pero con mejor distribución
+        productos_headers = [
+            'Referencia', 'Descripción', 'Acabado', 'Cantidad', 'Precio Unitario', 'Total'
+        ]
         
         # Datos de productos
-        pdf.set_font("Arial", size=6)
-        for item in cotization_data['items']:
-            pdf.set_x(x_start)
+        productos_data = [productos_headers]
+        
+        for item in cotizacion['items']:
+            productos_data.append([
+                item['referencia'],
+                # Reducir caracteres para que quepa mejor
+                item['descripcion'][:30] if len(item['descripcion']) > 30 else item['descripcion'],
+                # Acabado más corto
+                item['acabado'][:15] if len(item['acabado']) > 15 else item['acabado'],
+                str(item['cantidad']),
+                item['precio_unitario'],
+                item['total']
+            ])
+        
+        # Crear tabla de productos con anchos más conservadores
+        productos_table = Table(
+            productos_data, 
+            colWidths=[1.1*inch, 2.5*inch, 1.1*inch, 0.6*inch, 1*inch, 1*inch]
+        )
+        
+        productos_table.setStyle(TableStyle([
+            # Header
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 8),  # Fuente más pequeña
             
-            # Referencia
-            ref = item.get('referencia', '')
-            if len(ref) > 8:
-                ref = ref[:8]
-            pdf.cell(widths[0], 7, ref, 1, 0, 'C')
+            # Datos - fuente más pequeña
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 7),  # Fuente más pequeña
+            ('ALIGN', (0, 1), (0, -1), 'CENTER'),  # Referencia centrada
+            ('ALIGN', (1, 1), (1, -1), 'LEFT'),    # Descripción a la izquierda
+            ('ALIGN', (2, 1), (2, -1), 'LEFT'),    # Acabado a la izquierda
+            ('ALIGN', (3, 1), (3, -1), 'CENTER'),  # Cantidad centrada
+            ('ALIGN', (4, 1), (-1, -1), 'RIGHT'),  # Precios a la derecha
             
-            # Descripción - permitir más espacio pero dividir en líneas si es necesario
-            desc = item.get('descripcion', '')
-            if len(desc) > 35:
-                desc = desc[:32] + "..."
-            pdf.cell(widths[1], 7, desc, 1, 0, 'L')
+            # Bordes
+            ('BOX', (0, 0), (-1, -1), 1, colors.black),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.black),
             
-            # U.M.
-            pdf.cell(widths[2], 7, "UND", 1, 0, 'C')
+            # Padding reducido para ahorrar espacio
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
             
-            # Cantidad
-            pdf.cell(widths[3], 7, str(item.get('cantidad', 0)), 1, 0, 'C')
+            # Ajuste vertical para mejor distribución del texto
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        
+        story.append(productos_table)
+        story.append(Spacer(1, 20))
+        
+        # TOTALES - usar más ancho de página
+        totales_data = [
+            ['', 'Valor Subtotal:', cotizacion['resumen']['subtotal']],
+        ]
+        
+        if cotizacion['resumen']['descuento']:
+            totales_data.append(['', 'Descuento:', cotizacion['resumen']['descuento']])
+        
+        totales_data.append(['', 'Total:', cotizacion['resumen']['total']])
+        
+        totales_table = Table(totales_data, colWidths=[3.5*inch, 1.5*inch, 1.5*inch])
+        totales_table.setStyle(TableStyle([
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (1, 0), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (1, 0), (-1, -1), 9),  # Fuente más pequeña
+            ('BOX', (1, 0), (-1, -1), 1, colors.black),
+            ('INNERGRID', (1, 0), (-1, -1), 0.5, colors.black),
+            ('BACKGROUND', (1, -1), (-1, -1), colors.lightgrey),  # Destacar total
+            ('LEFTPADDING', (1, 0), (-1, -1), 6),  # Padding reducido
+            ('RIGHTPADDING', (1, 0), (-1, -1), 6),
+            ('TOPPADDING', (1, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (1, 0), (-1, -1), 6),
+        ]))
+        
+        story.append(totales_table)
+        story.append(Spacer(1, 30))
+        
+        # CONDICIONES GENERALES
+        if cotizacion.get('condiciones'):
+            story.append(Paragraph("<b>Condiciones Generales:</b>", 
+                                 ParagraphStyle('ConditionsTitle', parent=styles['Normal'], 
+                                              fontSize=10, fontName='Helvetica-Bold')))
+            story.append(Spacer(1, 8))
             
-            # Precio unitario
-            precio_unit = item.get('precio_unitario', 0)
-            precio_text = f"${precio_unit:,}"
-            if len(precio_text) > 12:
-                precio_text = f"${precio_unit/1000:.0f}K"
-            pdf.cell(widths[4], 7, precio_text, 1, 0, 'R')
+            for condicion in cotizacion['condiciones']:
+                story.append(Paragraph(f"• {condicion}", 
+                                     ParagraphStyle('Condition', parent=styles['Normal'], 
+                                                  fontSize=9, leftIndent=10)))
             
-            # Total
-            total = item.get('valor_total', 0)
-            total_text = f"${total:,}"
-            if len(total_text) > 14:
-                total_text = f"${total/1000:.0f}K"
-            pdf.cell(widths[5], 7, total_text, 1, 0, 'R')
+            story.append(Spacer(1, 20))
+        
+        # FIRMAS
+        firmas_data = [
+            ['Elaborado', 'Aprobado', 'Recibido'],
+            ['', '', ''],
+            ['', '', ''],
+            ['_________________', '_________________', '_________________']
+        ]
+        
+        firmas_table = Table(firmas_data, colWidths=[2.2*inch, 2.2*inch, 2.2*inch])
+        firmas_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),  # Fuente más pequeña
+            ('TOPPADDING', (0, 0), (-1, -1), 15),
+        ]))
+        
+        story.append(firmas_table)
+        
+        # Generar PDF
+        doc.build(story)
+        buffer.seek(0)
+        return buffer
+    
+    def obtener_condiciones_generales(self):
+        """Condiciones generales de la cotización"""
+        return [
+            'Los precios están sujetos a cambios sin previo aviso',
+            'La garantía aplica según las especificaciones del producto',
+            'Tiempos de entrega sujetos a disponibilidad',
+            'Se requiere 50% de anticipo para procesar el pedido'
+        ]
+    
+    def obtener_estadisticas(self):
+        """Obtener estadísticas del catálogo"""
+        if self.productos is None or self.productos.empty:
+            return None
+        
+        stats = {
+            'total_productos': len(self.productos),
+            'acabados_disponibles': self.productos['ACABADO DE LA MADERA'].dropna().unique().tolist(),
+            'usos_disponibles': self.productos['USO'].dropna().unique().tolist()
+        }
+        
+        # Estadísticas de precios por ubicación
+        for ubicacion, config in self.ubicaciones.items():
+            precios_sin_iva = self.productos[config['sin_iva']].dropna()
+            precios_con_iva = self.productos[config['con_iva']].dropna()
             
-            pdf.ln()
+            if not precios_sin_iva.empty:
+                stats[f'precios_{ubicacion}'] = {
+                    'min_sin_iva': precios_sin_iva.min(),
+                    'max_sin_iva': precios_sin_iva.max(),
+                    'promedio_sin_iva': precios_sin_iva.mean(),
+                    'min_con_iva': precios_con_iva.min(),
+                    'max_con_iva': precios_con_iva.max(),
+                    'promedio_con_iva': precios_con_iva.mean()
+                }
         
-        # Llenar filas vacías
-        empty_rows = max(0, 6 - len(cotization_data['items']))  # Reducir filas vacías
-        for _ in range(empty_rows):
-            pdf.set_x(x_start)
-            for width in widths:
-                pdf.cell(width, 7, "", 1, 0, 'C')
-            pdf.ln()
-        
-        # Sección de notas y totales
-        pdf.ln(4)
-        
-        # Totales (alineados a la derecha)
-        pdf.set_font("Arial", 'B', 9)
-        
-        # Subtotal
-        pdf.set_x(120)  # Posicionar a la derecha
-        pdf.cell(30, 6, "Valor Subtotal:", 1, 0, 'L')
-        pdf.cell(35, 6, f"${cotization_data['subtotal']:,}", 1, 1, 'R')
-        
-        # Impuestos
-        pdf.set_x(120)
-        pdf.cell(30, 6, "Valor impuestos:", 1, 0, 'L')
-        pdf.cell(35, 6, f"${cotization_data['impuestos']:,}", 1, 1, 'R')
-        
-        # Total
-        pdf.set_x(120)
-        pdf.set_font("Arial", 'B', 10)
-        pdf.cell(30, 7, "Total:", 1, 0, 'L')
-        pdf.cell(35, 7, f"${cotization_data['total']:,}", 1, 1, 'R')
-        
-        # Firmas - ajustadas al nuevo ancho
-        pdf.ln(6)
-        pdf.set_font("Arial", size=7)
-        
-        # Líneas para firmas (distribuidas en el ancho disponible)
-        y_firma = pdf.get_y()
-        pdf.line(20, y_firma, 55, y_firma)   # Elaborado
-        pdf.line(70, y_firma, 105, y_firma)  # Aprobado  
-        pdf.line(120, y_firma, 155, y_firma) # Recibido
-        
-        pdf.ln(2)
-        pdf.set_x(20)
-        pdf.cell(35, 4, "Elaborado", ln=False, align='C')
-        pdf.cell(35, 4, "Aprobado", ln=False, align='C')
-        pdf.cell(35, 4, "Recibido", ln=False, align='C')
-        
-        pdf.ln(8)
-        pdf.set_font("Arial", size=6)
-        pdf.set_x(10)
-        pdf.cell(85, 3, "ORIGINAL REIMPRESO", ln=False, align='L')
-        pdf.cell(85, 3, "Página 1 de 1", ln=True, align='R')
-        
-        return pdf
-        
-    except Exception as e:
-        st.error(f"Error al generar PDF: {str(e)}")
-        return None
+        return stats
 
-# Función para detectar si se solicita generar cotización
-def is_cotization_request(user_prompt):
-    """Detecta si el usuario solicita generar una cotización"""
-    text_lower = user_prompt.lower()
-    
-    # Detectar solicitudes de cotización con múltiples variantes
-    cotization_requests = [
-        'genera una cotización',
-        'generar cotización',
-        'hacer una cotización',
-        'crear cotización',
-        'cotización para',
-        'genera cotización',
-        'realiza una cotización',
-        'realizar cotización',
-        'elabora una cotización',
-        'elaborar cotización',
-        'prepara una cotización',
-        'preparar cotización',
-        'dame una cotización',
-        'necesito una cotización',
-        'quiero una cotización',
-        'haz una cotización',
-        'haga una cotización',
-        'cotizar',
-        'cotizame',
-        'cotízame',
-        'precio',
-        'cuanto cuesta',
-        'cuánto cuesta',
-        'valor',
-        'presupuesto'
-    ]
-    
-    return any(request in text_lower for request in cotization_requests)
-
-# Título y descripción de la aplicación
-st.markdown("<h1 class='main-header'>Asistente Construinmuniza</h1>", unsafe_allow_html=True)
-
-# Pantalla de configuración inicial si aún no se ha configurado
-if not st.session_state.is_configured:
-    st.markdown("<h2 class='subheader'>Acceso al Asistente</h2>", unsafe_allow_html=True)
-    
-    st.info("Por favor ingresa tu clave de acceso al asistente digital")
-    
-    # Solo solicitar la clave de acceso
-    agent_access_key = st.text_input(
-        "Clave de Acceso", 
-        type="password",
-        placeholder="Ingresa tu clave de acceso al asistente",
-        help="Tu clave de acceso para autenticar las solicitudes"
+def main():
+    # Configuración de la página
+    st.set_page_config(
+        page_title="Cotizador de Productos de Madera",
+        page_icon="🪵",
+        layout="wide",
+        initial_sidebar_state="expanded"
     )
     
-    if st.button("Iniciar sesión"):
-        if not agent_access_key:
-            st.error("Por favor, ingresa la clave de acceso")
-        else:
-            # Guardar configuración en session_state
-            st.session_state.agent_access_key = agent_access_key
-            st.session_state.is_configured = True
-            st.success("Clave configurada")  # Cambio de mensaje aquí
-            time.sleep(1)  # Breve pausa para mostrar el mensaje de éxito
-            st.rerun()
+    # Título principal
+    st.title("🪵 Cotizador de Productos de Madera")
+    st.markdown("---")
     
-    # Parar ejecución hasta que se configure
-    st.stop()
-
-# Una vez configurado, mostrar la interfaz normal
-st.markdown("<p class='subheader'>Interactúa con tu asistente.</p>", unsafe_allow_html=True)
-
-# Agregar ejemplos de preguntas con estilo profesional
-st.markdown("""
-<div class="example-questions">
-    <p style="font-size: 0.9rem; color: #8EBBFF; margin-bottom: 1.5rem; font-style: italic; font-family: 'Segoe UI', Arial, sans-serif;">
-        Ejemplos de preguntas que puedes hacerle:
-    </p>
-    <ul style="list-style-type: none; padding-left: 0; margin-bottom: 1.5rem; font-family: 'Segoe UI', Arial, sans-serif;">
-        <li style="margin-bottom: 0.8rem; padding: 0.5rem 0.8rem; background-color: rgba(30, 136, 229, 0.1); border-radius: 4px; border-left: 3px solid #1E88E5;">
-            <span style="font-weight: 500; color: #BBDEFB;">¿Qué servicios presta Construinmuniza?</span>
-        </li>
-        <li style="margin-bottom: 0.8rem; padding: 0.5rem 0.8rem; background-color: rgba(30, 136, 229, 0.1); border-radius: 4px; border-left: 3px solid #1E88E5;">
-            <span style="font-weight: 500; color: #BBDEFB;">¿Por qué se debe aplicar inmunizante a la madera?</span>
-        </li>
-        <li style="margin-bottom: 0.8rem; padding: 0.5rem 0.8rem; background-color: rgba(30, 136, 229, 0.1); border-radius: 4px; border-left: 3px solid #1E88E5;">
-            <span style="font-weight: 500; color: #BBDEFB;">¿Puedes darme la disponibilidad de inventario de la referencia RE40009250?</span>
-        </li>
-        <li style="margin-bottom: 0.8rem; padding: 0.5rem 0.8rem; background-color: rgba(30, 136, 229, 0.1); border-radius: 4px; border-left: 3px solid #1E88E5;">
-            <span style="font-weight: 500; color: #BBDEFB;">¿Puedes darme el precio de PISO PARED 10X1.7X100M2 CEP en El Chagualo?</span>
-        </li>
-        <li style="margin-bottom: 0.8rem; padding: 0.5rem 0.8rem; background-color: rgba(255, 152, 0, 0.1); border-radius: 4px; border-left: 3px solid #FF9800;">
-            <span style="font-weight: 500; color: #FFE0B2;">Genera una cotización para 5 alfardas tratadas 12X300</span>
-        </li>
-    </ul>
-</div>
-""", unsafe_allow_html=True)
-
-# Sidebar para configuración
-st.sidebar.title("Configuración")
-
-# Mostrar información de conexión actual
-st.sidebar.success("✅ Configuración cargada")
-with st.sidebar.expander("Ver configuración actual"):
-    st.code(f"Endpoint: {st.session_state.agent_endpoint}\nClave de acceso: {'*'*10}")
-
-# Ajustes avanzados
-with st.sidebar.expander("Ajustes avanzados"):
-    temperature = st.slider("Temperatura", min_value=0.0, max_value=1.0, value=0.2, step=0.1,
-                          help="Valores más altos generan respuestas más creativas, valores más bajos generan respuestas más deterministas.")
+    # Inicializar el generador
+    if 'generador' not in st.session_state:
+        st.session_state.generador = GeneradorCotizacionesMadera()
     
-    max_tokens = st.slider("Longitud máxima", min_value=100, max_value=2000, value=1000, step=100,
-                          help="Número máximo de tokens en la respuesta.")
-
-# Sección para probar conexión con el agente
-with st.sidebar.expander("Probar conexión"):
-    if st.button("Verificar endpoint"):
-        with st.spinner("Verificando conexión..."):
-            try:
-                agent_endpoint = st.session_state.agent_endpoint
-                agent_access_key = st.session_state.agent_access_key
+    # Sidebar para configuración
+    st.sidebar.header("⚙️ Configuración")
+    
+    # Cargar archivo
+    st.sidebar.subheader("📁 Cargar Catálogo")
+    archivo_excel = st.sidebar.file_uploader(
+        "Selecciona tu archivo Excel:",
+        type=['xlsx', 'xls'],
+        help="Sube tu archivo 'GUION PARA IA LISTADO.xlsx'"
+    )
+    
+    if archivo_excel is not None:
+        with st.sidebar:
+            with st.spinner('Cargando catálogo...'):
+                resultado = st.session_state.generador.cargar_excel(archivo_excel)
                 
-                if not agent_endpoint or not agent_access_key:
-                    st.error("Falta configuración del endpoint o clave de acceso")
+                if resultado['exito']:
+                    st.success(f"✅ {resultado['mensaje']}")
+                    st.session_state.catalogo_cargado = True
                 else:
-                    # Asegurarse de que el endpoint termine correctamente
-                    if not agent_endpoint.endswith("/"):
-                        agent_endpoint += "/"
-                    
-                    # Verificar si la documentación está disponible (común en estos endpoints)
-                    docs_url = f"{agent_endpoint}docs"
-                    
-                    # Preparar headers
-                    headers = {
-                        "Authorization": f"Bearer {agent_access_key}",
-                        "Content-Type": "application/json"
-                    }
-                    
-                    try:
-                        # Primero intentar verificar si hay documentación disponible
-                        response = requests.get(docs_url, timeout=10)
-                        
-                        if response.status_code < 400:
-                            st.success(f"✅ Documentación del agente accesible en: {docs_url}")
-                        
-                        # Luego intentar hacer una solicitud simple para verificar la conexión
-                        completions_url = f"{agent_endpoint}api/v1/chat/completions"
-                        test_payload = {
-                            "model": "n/a",
-                            "messages": [{"role": "user", "content": "Hello"}],
-                            "max_tokens": 5,
-                            "stream": False
-                        }
-                        
-                        response = requests.post(completions_url, headers=headers, json=test_payload, timeout=10)
-                        
-                        if response.status_code < 400:
-                            st.success(f"✅ Conexión exitosa con el endpoint del agente")
-                            with st.expander("Ver detalles de la respuesta"):
-                                try:
-                                    st.json(response.json())
-                                except:
-                                    st.code(response.text)
-                            st.info("🔍 La API está configurada correctamente y responde a las solicitudes.")
-                        else:
-                            st.error(f"❌ Error al conectar con el agente. Código: {response.status_code}")
-                            with st.expander("Ver detalles del error"):
-                                st.code(response.text)
-                    except Exception as e:
-                        st.error(f"Error de conexión: {str(e)}")
-            except Exception as e:
-                st.error(f"Error al verificar endpoint: {str(e)}")
-
-# Opciones de gestión de conversación
-st.sidebar.markdown("### Gestión de conversación")
-
-# Botón para limpiar conversación
-if st.sidebar.button("🗑️ Limpiar conversación"):
-    st.session_state.messages = []
-    st.session_state.last_cotization_data = None
-    st.rerun()
-
-# Botón para guardar conversación en PDF
-if st.sidebar.button("💾 Guardar conversación en PDF"):
-    # Crear PDF
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
+                    st.error(f"❌ {resultado['mensaje']}")
+                    st.session_state.catalogo_cargado = False
+    else:
+        st.session_state.catalogo_cargado = False
     
-    # Añadir título
-    pdf.set_font("Arial", 'B', 16)
-    pdf.cell(200, 10, "Conversación con el Asistente", ln=True, align='C')
-    pdf.ln(10)
+    # Verificar si el catálogo está cargado
+    if not st.session_state.get('catalogo_cargado', False):
+        st.warning("📋 Por favor, carga tu archivo Excel en la barra lateral para comenzar.")
+        st.stop()
     
-    # Añadir fecha
-    from datetime import datetime
-    pdf.set_font("Arial", 'I', 10)
-    pdf.cell(200, 10, f"Generado el: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=True)
-    pdf.ln(10)
-    
-    # Recuperar mensajes
-    pdf.set_font("Arial", size=12)
-    for msg in st.session_state.messages:
-        if msg["role"] == "user":
-            pdf.set_text_color(0, 0, 255)  # Azul para usuario
-            pdf.cell(200, 10, "Usuario:", ln=True)
-        else:
-            pdf.set_text_color(0, 128, 0)  # Verde para asistente
-            pdf.cell(200, 10, "Asistente:", ln=True)
-        
-        pdf.set_text_color(0, 0, 0)  # Negro para el contenido
-        
-        # Partir el texto en múltiples líneas si es necesario
-        text = msg["content"]
-        pdf.multi_cell(190, 10, text)
-        pdf.ln(5)
-    
-    # Guardar el PDF en un archivo temporal
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-        pdf_path = tmp_file.name
-        pdf.output(pdf_path)
-    
-    # Abrir y leer el archivo para la descarga
-    with open(pdf_path, "rb") as f:
-        pdf_data = f.read()
-    
-    # Botón de descarga
-    st.sidebar.download_button(
-        label="Descargar PDF",
-        data=pdf_data,
-        file_name="conversacion.pdf",
-        mime="application/pdf",
+    # Configuración de búsqueda
+    st.sidebar.subheader("🔍 Configuración de Búsqueda")
+    ubicacion = st.sidebar.selectbox(
+        "Ubicación:",
+        options=['caldas', 'chagualo'],
+        format_func=lambda x: 'Caldas' if x == 'caldas' else 'Chagualo, Girardota, San Cristóbal'
     )
-
-# Sección para generar PDF de cotización - SIEMPRE VISIBLE si hay datos
-if st.session_state.last_cotization_data and st.session_state.last_cotization_data.get('items'):
-    st.sidebar.markdown("### 📄 Última Cotización")
     
-    # Mostrar información básica de la cotización
-    cotization_info = st.session_state.last_cotization_data
-    if cotization_info['items']:
-        item = cotization_info['items'][0]  # Mostrar el primer item
-        st.sidebar.write(f"**Producto:** {item['descripcion']}")
-        st.sidebar.write(f"**Cantidad:** {item['cantidad']} UND")
-        st.sidebar.write(f"**Total:** ${cotization_info['total']:,} COP")
-        st.sidebar.write(f"**Número:** {cotization_info['numero_cotizacion']}")
+    incluir_iva = st.sidebar.checkbox("Incluir IVA", value=True)
     
-    # Usar columnas para el botón
-    col_pdf1, col_pdf2 = st.sidebar.columns([1, 1])
+    # Área principal - Búsqueda
+    col1, col2 = st.columns([2, 1])
     
-    with col_pdf1:
-        if st.button("📄 Generar PDF", key="generate_pdf"):
-            with st.spinner("Generando PDF..."):
-                pdf = generate_cotization_pdf(st.session_state.last_cotization_data)
-                if pdf:
-                    # Guardar el PDF en un archivo temporal
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                        pdf_path = tmp_file.name
-                        pdf.output(pdf_path)
-                    
-                    # Abrir y leer el archivo para la descarga
-                    with open(pdf_path, "rb") as f:
-                        pdf_data = f.read()
-                    
-                    # Guardar PDF en session state para descarga
-                    st.session_state.pdf_data = pdf_data
-                    st.session_state.pdf_filename = f"cotizacion_{st.session_state.last_cotization_data['numero_cotizacion']}.pdf"
-                    st.sidebar.success("PDF generado!")
-                    st.rerun()
+    with col1:
+        st.subheader("🔍 Buscar Productos")
+        termino_busqueda = st.text_input(
+            "Describe el producto que buscas:",
+            placeholder="Ej: mesa comedor, silla oficina, escritorio..."
+        )
     
-    # Mostrar botón de descarga si hay PDF generado
-    if hasattr(st.session_state, 'pdf_data') and st.session_state.pdf_data:
-        with col_pdf2:
-            st.download_button(
-                label="⬇️ Descargar",
-                data=st.session_state.pdf_data,
-                file_name=st.session_state.pdf_filename,
-                mime="application/pdf",
-                key="download_pdf"
+    with col2:
+        st.subheader("📊 Estadísticas")
+        if st.button("Ver Estadísticas del Catálogo"):
+            stats = st.session_state.generador.obtener_estadisticas()
+            if stats:
+                st.metric("Total Productos", stats['total_productos'])
+                with st.expander("Ver más detalles"):
+                    st.write("**Acabados disponibles:**")
+                    st.write(", ".join(stats['acabados_disponibles'][:10]))
+                    st.write("**Usos disponibles:**")
+                    st.write(", ".join(stats['usos_disponibles'][:10]))
+    
+    # Realizar búsqueda
+    if termino_busqueda:
+        with st.spinner('Buscando productos...'):
+            resultados = st.session_state.generador.buscar_productos(
+                termino_busqueda, 
+                ubicacion=ubicacion, 
+                incluir_iva=incluir_iva,
+                limite=20
             )
-
-# Botón para cerrar sesión
-if st.sidebar.button("Cerrar sesión"):
-    st.session_state.is_configured = False
-    st.session_state.agent_access_key = ""
-    st.session_state.last_cotization_data = None
-    st.rerun()
-
-# Función para enviar consulta al agente
-def query_agent(prompt, history=None):
-    try:
-        # Obtener configuración del agente
-        agent_endpoint = st.session_state.agent_endpoint
-        agent_access_key = st.session_state.agent_access_key
         
-        if not agent_endpoint or not agent_access_key:
-            return {"error": "Las credenciales de API no están configuradas correctamente."}
-        
-        # Asegurarse de que el endpoint termine correctamente
-        if not agent_endpoint.endswith("/"):
-            agent_endpoint += "/"
-        
-        # Construir URL para chat completions
-        completions_url = f"{agent_endpoint}api/v1/chat/completions"
-        
-        # Preparar headers con autenticación
-        headers = {
-            "Authorization": f"Bearer {agent_access_key}",
-            "Content-Type": "application/json"
-        }
-        
-        # Preparar los mensajes en formato OpenAI
-        messages = []
-        if history:
-            messages.extend([{"role": msg["role"], "content": msg["content"]} for msg in history])
-        messages.append({"role": "user", "content": prompt})
-        
-        # Construir el payload
-        payload = {
-            "model": "n/a",  # El modelo no es relevante para el agente
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False
-        }
-        
-        # Enviar solicitud POST
-        try:
-            response = requests.post(completions_url, headers=headers, json=payload, timeout=60)
+        if resultados['exito']:
+            st.subheader(f"📦 Productos encontrados ({resultados['total']})")
             
-            # Verificar respuesta
-            if response.status_code == 200:
-                try:
-                    response_data = response.json()
+            # Mostrar productos en tarjetas
+            for i, producto in enumerate(resultados['resultados']):
+                with st.expander(f"🪵 {producto['descripcion']} - {producto['precio']}", expanded=i<3):
+                    col1, col2, col3 = st.columns(3)
                     
-                    # Procesar la respuesta en formato OpenAI
-                    if "choices" in response_data and len(response_data["choices"]) > 0:
-                        choice = response_data["choices"][0]
-                        if "message" in choice and "content" in choice["message"]:
-                            result = {
-                                "response": choice["message"]["content"]
-                            }
-                            return result
+                    with col1:
+                        st.write(f"**Referencia:** {producto['referencia']}")
+                        st.write(f"**Acabado:** {producto['acabado']}")
+                        st.write(f"**Uso:** {producto['uso']}")
                     
-                    # Si no se encuentra la estructura esperada
-                    return {"error": "Formato de respuesta inesperado", "details": str(response_data)}
-                except ValueError:
-                    # Si no es JSON, devolver el texto plano
-                    return {"response": response.text}
-            else:
-                # Error en la respuesta
-                error_message = f"Error en la solicitud. Código: {response.status_code}"
-                try:
-                    error_details = response.json()
-                    return {"error": error_message, "details": str(error_details)}
-                except:
-                    return {"error": error_message, "details": response.text}
-                
-        except requests.exceptions.RequestException as e:
-            return {"error": f"Error en la solicitud HTTP: {str(e)}"}
-        
-    except Exception as e:
-        return {"error": f"Error al comunicarse con el asistente: {str(e)}"}
-
-# Mostrar historial de conversación (sin audio)
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# Campo de entrada para el mensaje
-prompt = st.chat_input("Escribe tu pregunta aquí...")
-
-# Procesar la entrada del usuario
-if prompt:
-    # Añadir mensaje del usuario al historial
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    
-    # Mostrar mensaje del usuario
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    
-    # Preparar historial para la API
-    api_history = st.session_state.messages[:-1]  # Excluir el mensaje actual
-    
-    # Mostrar indicador de carga mientras se procesa
-    with st.chat_message("assistant"):
-        with st.spinner("Buscando..."):
-            # Enviar consulta al agente
-            response = query_agent(prompt, api_history)
-            
-            if "error" in response:
-                st.error(f"Error: {response['error']}")
-                if "details" in response:
-                    with st.expander("Detalles del error"):
-                        st.code(response["details"])
-                
-                # Añadir mensaje de error al historial
-                error_msg = f"Lo siento, ocurrió un error al procesar tu solicitud: {response['error']}"
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
-            else:
-                # Mostrar respuesta del asistente
-                response_text = response.get("response", "No se recibió respuesta del agente.")
-                st.markdown(response_text)
-                
-                # Verificar si el USUARIO solicitó una cotización
-                if is_cotization_request(prompt):
-                    with st.spinner("Procesando datos de cotización..."):
-                        cotization_data = extract_cotization_data(response_text)
+                    with col2:
+                        st.write(f"**Garantía:** {producto['garantia']}")
+                        st.write(f"**Ubicación:** {producto['ubicacion'].title()}")
+                        st.write(f"**Precio:** {producto['precio']}")
+                    
+                    with col3:
+                        # Comparación de precios
+                        st.write("**Comparación de precios:**")
+                        st.write(f"Caldas s/IVA: {st.session_state.generador.formatear_precio(producto['precios']['caldas_sin_iva'])}")
+                        st.write(f"Caldas c/IVA: {st.session_state.generador.formatear_precio(producto['precios']['caldas_con_iva'])}")
+                        st.write(f"Chagualo s/IVA: {st.session_state.generador.formatear_precio(producto['precios']['chagualo_sin_iva'])}")
+                        st.write(f"Chagualo c/IVA: {st.session_state.generador.formatear_precio(producto['precios']['chagualo_con_iva'])}")
+                    
+                    # Botón para agregar a cotización
+                    cantidad = st.number_input(
+                        f"Cantidad para {producto['referencia']}:",
+                        min_value=1,
+                        value=1,
+                        key=f"cantidad_{i}"
+                    )
+                    
+                    if st.button(f"➕ Agregar a Cotización", key=f"agregar_{i}"):
+                        if 'productos_cotizacion' not in st.session_state:
+                            st.session_state.productos_cotizacion = []
                         
-                        # Verificar si se encontraron datos válidos
-                        if cotization_data['items'] and len(cotization_data['items']) > 0:
-                            st.session_state.last_cotization_data = cotization_data
-                            
-                            # Mostrar resumen de la cotización extraída
-                            st.success("✅ Cotización generada exitosamente!")
-                            
-                            item = cotization_data['items'][0]
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("Producto", item['descripcion'])
-                            with col2:
-                                st.metric("Cantidad", f"{item['cantidad']} UND")
-                            with col3:
-                                st.metric("Total", f"${cotization_data['total']:,} COP")
-                            
-                            st.info("📄 Puedes generar el PDF desde la barra lateral.")
-                            
-                            # Forzar actualización de la interfaz para mostrar el botón del PDF
-                            time.sleep(0.5)  # Pequeña pausa para asegurar que se vean los mensajes
-                            st.rerun()
-                            
-                        else:
-                            # Si no se pudieron extraer datos, ofrecer opción manual
-                            st.warning("⚠️ No se pudieron extraer automáticamente todos los datos de la cotización.")
-                            
-                            with st.expander("📝 Crear cotización manualmente"):
-                                st.write("Basándome en la respuesta, puedes completar estos datos:")
-                                
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    manual_descripcion = st.text_input("Descripción del producto:", value="PRODUCTO")
-                                    manual_cantidad = st.number_input("Cantidad:", min_value=1, value=1)
-                                    manual_precio = st.number_input("Precio unitario:", min_value=0, value=0)
-                                
-                                with col2:
-                                    manual_referencia = st.text_input("Referencia:", value="REF001")
-                                    manual_cliente = st.text_input("Cliente:", value="CONSUMIDOR FINAL")
-                                
-                                if st.button("Crear cotización manual"):
-                                    if manual_precio > 0:
-                                        manual_cotization = {
-                                            'items': [{
-                                                'referencia': manual_referencia,
-                                                'descripcion': manual_descripcion,
-                                                'cantidad': manual_cantidad,
-                                                'precio_unitario': manual_precio,
-                                                'impuestos': 0,
-                                                'valor_total': manual_precio * manual_cantidad,
-                                                'peso': 186
-                                            }],
-                                            'subtotal': manual_precio * manual_cantidad,
-                                            'impuestos': 0,
-                                            'total': manual_precio * manual_cantidad,
-                                            'cliente': manual_cliente,
-                                            'fecha': datetime.now().strftime('%d/%m/%Y'),
-                                            'numero_cotizacion': f"CCV-{int(time.time())}"[-8:]
-                                        }
-                                        st.session_state.last_cotization_data = manual_cotization
-                                        st.success("✅ Cotización manual creada!")
-                                        st.rerun()
-                                    else:
-                                        st.error("Por favor ingresa un precio válido")
+                        producto_con_cantidad = producto.copy()
+                        producto_con_cantidad['cantidad'] = cantidad
+                        st.session_state.productos_cotizacion.append(producto_con_cantidad)
+                        st.success(f"✅ {producto['descripcion']} agregado a la cotización")
+        else:
+            st.warning(f"⚠️ {resultados['mensaje']}")
+    
+    # Sección de cotización
+    if 'productos_cotizacion' in st.session_state and st.session_state.productos_cotizacion:
+        st.markdown("---")
+        st.subheader("📋 Cotización en Progreso")
+        
+        # Mostrar productos seleccionados
+        total_items = 0
+        for i, producto in enumerate(st.session_state.productos_cotizacion):
+            col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+            
+            with col1:
+                st.write(f"**{producto['descripcion']}**")
+                st.write(f"Ref: {producto['referencia']}")
+            
+            with col2:
+                st.write(f"Cantidad: {producto['cantidad']}")
+            
+            with col3:
+                st.write(f"Precio: {producto['precio']}")
+            
+            with col4:
+                if st.button("🗑️", key=f"eliminar_{i}"):
+                    st.session_state.productos_cotizacion.pop(i)
+                    st.experimental_rerun()
+            
+            total_items += producto['cantidad']
+        
+        st.write(f"**Total items:** {total_items}")
+        
+        # Formulario de cliente y opciones
+        st.subheader("👤 Datos del Cliente")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            nombre_cliente = st.text_input("Nombre completo:")
+            empresa_cliente = st.text_input("Empresa:")
+            email_cliente = st.text_input("Email:")
+        
+        with col2:
+            telefono_cliente = st.text_input("Teléfono:")
+            descuento = st.number_input("Descuento (%):", min_value=0, max_value=50, value=0)
+            validez_dias = st.number_input("Validez (días):", min_value=1, value=30)
+        
+        # Generar cotización
+        if st.button("📄 Generar Cotización", type="primary"):
+            if nombre_cliente:
+                datos_cliente = {
+                    'nombre': nombre_cliente,
+                    'empresa': empresa_cliente,
+                    'email': email_cliente,
+                    'telefono': telefono_cliente
+                }
                 
-                # Añadir respuesta al historial
-                st.session_state.messages.append({"role": "assistant", "content": response_text})
+                opciones = {
+                    'ubicacion': ubicacion,
+                    'incluir_iva': incluir_iva,
+                    'descuento': descuento,
+                    'validez_dias': validez_dias
+                }
+                
+                cotizacion = st.session_state.generador.generar_cotizacion(
+                    st.session_state.productos_cotizacion,
+                    datos_cliente,
+                    opciones
+                )
+                
+                # Mostrar cotización
+                st.success("✅ Cotización generada exitosamente!")
+                
+                # Guardar cotización en session_state para descargar PDF
+                st.session_state.ultima_cotizacion = cotizacion
+                
+                # Generar PDF automáticamente al crear cotización
+                try:
+                    datos_empresa_pdf = None
+                    if any(key.startswith('empresa_') for key in st.session_state.keys()):
+                        datos_empresa_pdf = {
+                            'nombre': st.session_state.get('empresa_nombre', 'Tu Empresa de Productos de Madera'),
+                            'nit': st.session_state.get('empresa_nit', '900.XXX.XXX-X'),
+                            'direccion': st.session_state.get('empresa_direccion', 'Calle XX # XX - XX'),
+                            'telefono': st.session_state.get('empresa_telefono', 'XXX-XXXX'),
+                            'ciudad': st.session_state.get('empresa_ciudad', 'Medellín'),
+                            'email': st.session_state.get('empresa_email', 'ventas@tuempresa.com')
+                        }
+                    
+                    pdf_buffer = st.session_state.generador.generar_pdf_cotizacion(cotizacion, datos_empresa_pdf)
+                    st.session_state.pdf_generado = pdf_buffer.getvalue()
+                    st.session_state.nombre_archivo_pdf = f"Cotizacion_{cotizacion['numero_cotizacion']}.pdf"
+                except Exception as e:
+                    st.error(f"Error al generar PDF: {str(e)}")
+                    st.session_state.pdf_generado = None
+                
+                # Botones de acción
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    # Botón de descarga directo
+                    if st.session_state.get('pdf_generado') is not None:
+                        st.download_button(
+                            label="📄 Descargar PDF",
+                            data=st.session_state.pdf_generado,
+                            file_name=st.session_state.nombre_archivo_pdf,
+                            mime="application/pdf",
+                            type="primary"
+                        )
+                    else:
+                        st.error("No se pudo generar el PDF")
+                
+                with col2:
+                    if st.button("🗑️ Nueva Cotización"):
+                        st.session_state.productos_cotizacion = []
+                        if 'pdf_generado' in st.session_state:
+                            del st.session_state.pdf_generado
+                        if 'ultima_cotizacion' in st.session_state:
+                            del st.session_state.ultima_cotizacion
+                        st.experimental_rerun()
+                
+                with col3:
+                    # Configurar datos de empresa para PDF
+                    if st.button("⚙️ Configurar Empresa"):
+                        st.session_state.mostrar_config_empresa = True
+                
+                # Configuración de empresa (modal)
+                if st.session_state.get('mostrar_config_empresa', False):
+                    st.markdown("---")
+                    st.subheader("🏢 Configuración de Empresa para PDF")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        nombre_empresa = st.text_input("Nombre de la empresa:", 
+                                                     value=st.session_state.get('empresa_nombre', 'Tu Empresa de Productos de Madera'))
+                        nit_empresa = st.text_input("NIT:", 
+                                                   value=st.session_state.get('empresa_nit', '900.XXX.XXX-X'))
+                        direccion_empresa = st.text_input("Dirección:", 
+                                                         value=st.session_state.get('empresa_direccion', 'Calle XX # XX - XX'))
+                    
+                    with col2:
+                        telefono_empresa = st.text_input("Teléfono:", 
+                                                       value=st.session_state.get('empresa_telefono', 'XXX-XXXX'))
+                        ciudad_empresa = st.text_input("Ciudad:", 
+                                                     value=st.session_state.get('empresa_ciudad', 'Medellín'))
+                        email_empresa = st.text_input("Email:", 
+                                                    value=st.session_state.get('empresa_email', 'ventas@tuempresa.com'))
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if st.button("💾 Guardar Configuración"):
+                            st.session_state.empresa_nombre = nombre_empresa
+                            st.session_state.empresa_nit = nit_empresa
+                            st.session_state.empresa_direccion = direccion_empresa
+                            st.session_state.empresa_telefono = telefono_empresa
+                            st.session_state.empresa_ciudad = ciudad_empresa
+                            st.session_state.empresa_email = email_empresa
+                            st.session_state.mostrar_config_empresa = False
+                            
+                            # Regenerar PDF con nuevos datos de empresa
+                            if 'ultima_cotizacion' in st.session_state:
+                                try:
+                                    datos_empresa_pdf = {
+                                        'nombre': nombre_empresa,
+                                        'nit': nit_empresa,
+                                        'direccion': direccion_empresa,
+                                        'telefono': telefono_empresa,
+                                        'ciudad': ciudad_empresa,
+                                        'email': email_empresa
+                                    }
+                                    pdf_buffer = st.session_state.generador.generar_pdf_cotizacion(
+                                        st.session_state.ultima_cotizacion, 
+                                        datos_empresa_pdf
+                                    )
+                                    st.session_state.pdf_generado = pdf_buffer.getvalue()
+                                except:
+                                    pass
+                            
+                            st.success("✅ Configuración guardada")
+                            st.experimental_rerun()
+                    
+                    with col2:
+                        if st.button("❌ Cancelar"):
+                            st.session_state.mostrar_config_empresa = False
+                            st.experimental_rerun()
+                    
+                    st.markdown("---")
+                
+                # Información de la cotización
+                st.subheader(f"📄 Cotización {cotizacion['numero_cotizacion']}")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.write(f"**Fecha:** {cotizacion['fecha']}")
+                    st.write(f"**Vencimiento:** {cotizacion['fecha_vencimiento']}")
+                
+                with col2:
+                    st.write(f"**Cliente:** {cotizacion['cliente']['nombre']}")
+                    st.write(f"**Empresa:** {cotizacion['cliente']['empresa']}")
+                
+                with col3:
+                    st.write(f"**Ubicación:** {cotizacion['ubicacion']}")
+                    st.write(f"**IVA incluido:** {'Sí' if cotizacion['incluye_iva'] else 'No'}")
+                
+                # Detalles de productos
+                st.subheader("📦 Productos")
+                df_cotizacion = pd.DataFrame(cotizacion['items'])
+                st.dataframe(df_cotizacion[['referencia', 'descripcion', 'cantidad', 'precio_unitario', 'total']], use_container_width=True)
+                
+                # Resumen financiero
+                st.subheader("💰 Resumen")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Subtotal", cotizacion['resumen']['subtotal'])
+                
+                with col2:
+                    if cotizacion['resumen']['descuento']:
+                        st.metric("Descuento", cotizacion['resumen']['descuento'])
+                
+                with col3:
+                    st.metric("TOTAL", cotizacion['resumen']['total'])
+                
+                # Condiciones
+                with st.expander("📋 Condiciones Generales"):
+                    for condicion in cotizacion['condiciones']:
+                        st.write(f"• {condicion}")
+                
+                # Botón para limpiar cotización
+                if st.button("🗑️ Limpiar Cotización", key="limpiar_final"):
+                    st.session_state.productos_cotizacion = []
+                    if 'pdf_generado' in st.session_state:
+                        del st.session_state.pdf_generado
+                    if 'ultima_cotizacion' in st.session_state:
+                        del st.session_state.ultima_cotizacion
+                    st.experimental_rerun()
+            else:
+                st.error("❌ Por favor, ingresa al menos el nombre del cliente.")
 
-# Pie de página
-st.markdown("<div class='footer'>Asistente Digital © 2025</div>", unsafe_allow_html=True)
+if __name__ == "__main__":
+    main()
